@@ -23,14 +23,14 @@ jobs:
           fetch-depth: 0  # full history required for branch-delta scanning
 
       - name: Scan for secrets
-        # trufflehog v3.82.6 — pinned SHA to prevent supply-chain attack.
+        # trufflehog v3.95.5 — pinned SHA to prevent supply-chain attack.
         # @main was the only unpinned action in this workflow; all others are
         # SHA-pinned. A compromised @main would execute arbitrary code in the
         # CI runner with full access to all repository secrets.
         # To update: check https://github.com/trufflesecurity/trufflehog/releases
         # get the SHA for the desired tag with:
-        #   gh release view v3.x.y --repo trufflesecurity/trufflehog --json tagName
-        uses: trufflesecurity/trufflehog@b5b5bf8b6e1c4c2b9b7f9c02fbbe31e5c6e1b2a0
+        #   git ls-remote https://github.com/trufflesecurity/trufflehog.git "refs/tags/v3.x.y"
+        uses: trufflesecurity/trufflehog@d411fff7b8879a62509f3fa98c07f247ac089a51
         with:
           path: ./
           base: ${{ github.event.repository.default_branch }}
