@@ -101,13 +101,17 @@ jobs:
             pandas-stubs
 
       - name: Run mypy
-        # analyst_copilot/ uses flat imports (no package prefix) so we add
-        # it to MYPYPATH so mypy can resolve cross-module references without
-        # requiring a full package install.
+        # --explicit-package-bases tells mypy to treat the repo root as the
+        # package root, so analyst_copilot/observability.py is resolved as
+        # analyst_copilot.observability only — never as the bare "observability".
+        # MYPYPATH=analyst_copilot caused the duplicate-module error because it
+        # added analyst_copilot/ to the search path, making every file visible
+        # under both its qualified name and its bare filename simultaneously.
         run: |
-          MYPYPATH=analyst_copilot mypy analyst_copilot/ \
+          mypy analyst_copilot/ \
             --strict \
             --ignore-missing-imports \
+            --explicit-package-bases \
             --exclude 'analyst_copilot/__init__\.py'
 
   test:
@@ -205,7 +209,7 @@ jobs:
       - name: Upload coverage report
         if: always()
         # upload-artifact v4.4.3
-        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0aba2995
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         with:
           name: coverage-report
           path: coverage.xml
@@ -213,7 +217,7 @@ jobs:
       - name: Upload pytest cache
         if: always()
         # upload-artifact v4.4.3
-        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0aba2995
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         with:
           name: pytest-cache
           path: .pytest_cache/
