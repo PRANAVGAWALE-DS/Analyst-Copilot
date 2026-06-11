@@ -1,0 +1,110 @@
+# ── Secrets & environment ─────────────────────────────────────────────────────
+.env
+.env.*
+.env.local
+!.env.example
+
+# ── Binary ML artifacts (store in S3/GCS or regenerate via scripts/) ─────────
+# FAISS index + metadata
+data/faiss_index/*.faiss
+data/faiss_index/*.meta
+data/faiss_index/embed_cache.json
+data/faiss_index/*.pkl
+
+# M-18 FIX: data/embed_cache.json (root-level legacy cache used by
+# SchemaEmbedder._migrate_legacy_cache) was not covered by the rule above,
+# which only matches the faiss_index/ subdirectory copy.  The root-level
+# file (222 KB) can contain embedding vectors derived from sensitive schema
+# content and must not be tracked.
+data/embed_cache.json
+
+# Long-term memory index
+data/lt_memory/
+
+# Sentence-transformers model cache (docker-compose: model_cache volume)
+# ~1.3 GB for BAAI/bge-large-en-v1.5 — never commit
+data/model_cache/
+
+# Uploaded / generated data files
+data/files/
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+
+# Eval artefacts (may contain real schema column names)
+data/eval_*.json
+
+# Catch-all for any stray FAISS / pickle files outside data/
+*.faiss
+*.pkl
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.installed.cfg
+pip-wheel-metadata/
+*.pyo
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+.venv1/
+venv/
+env/
+ENV/
+venv_ANALYST_COPILOT/
+
+# ── Pytest / coverage ─────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.pytest_tmp/
+
+# ── Ruff / mypy ───────────────────────────────────────────────────────────────
+.ruff_cache/
+.mypy_cache/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Debug / scratch files ─────────────────────────────────────────────────────
+tmp_*.py
+openai_matches.txt
+project_tree.txt
+rg_output.txt
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+# Keep Dockerfile and docker-compose.yml tracked; ignore local override files
+docker-compose.override.yml
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+# P2-10 FIX: logs.txt (root-level application log written by uvicorn / structured
+# JSON logging) was not excluded by *.log (no extension).  May contain session_ids,
+# nl_query_length, and timing side-channels from real user queries.
+logs.txt
+# Coverage artifacts
+htmlcov/
+.coverage
+pytest_results.txt

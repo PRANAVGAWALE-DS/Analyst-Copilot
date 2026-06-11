@@ -1,0 +1,68 @@
+# ── Core API ──────────────────────────────────────────────────────────────────
+# DEP-A FIX: 0.110.0 → >=0.115.0 — pulls starlette>=0.41.0, required for
+# httpx 0.28+ TestClient compatibility (groq>=0.11.0 mandates httpx>=0.28.0).
+fastapi>=0.115.0,<0.116.0
+# DEP-A FIX: relaxed from ==0.29.0 to >=0.30.0 to match fastapi 0.115.x test matrix.
+uvicorn[standard]>=0.30.0,<0.35.0
+pydantic==2.7.0
+python-dotenv==1.0.1
+
+# ── LLM ───────────────────────────────────────────────────────────────────────
+# google-generativeai removed: superseded by google-genai (unified SDK v1.x)
+google-genai==1.0.0
+groq>=0.11.0,<1.0.0
+# groq 0.11+ dropped the httpx "proxies" kwarg; compatible with httpx 0.28+
+tiktoken==0.6.0
+
+# ── Embeddings + Vector Index ─────────────────────────────────────────────────
+sentence-transformers==3.0.1
+faiss-cpu==1.8.0
+
+# ── SQL Parsing + Execution ───────────────────────────────────────────────────
+sqlglot==23.9.0
+sqlalchemy==2.0.29
+# psycopg2-binary: acceptable for local dev and Windows.
+# The Dockerfile overrides this with compiled psycopg2 for the production image.
+psycopg2-binary==2.9.9
+aiosqlite==0.20.0
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+pandas==2.2.2
+numpy==1.26.4
+pyarrow==16.0.0
+# M1 FIX: openpyxl is required by pd.read_excel() in dataframe_store.py for
+# .xlsx file uploads. Previously absent — silent ImportError at runtime.
+# xlrd intentionally omitted: it only supports legacy .xls binary format
+# and has known security issues; .xlsx-only is safer.
+openpyxl>=3.1.0,<4.0.0
+
+# ── Session Store ─────────────────────────────────────────────────────────────
+redis==5.0.4
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+tqdm==4.66.2
+
+# ── File upload support ───────────────────────────────────────────────────────
+# Required by FastAPI's UploadFile / multipart form handling (/upload endpoint).
+python-multipart>=0.0.9
+
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+# DEP-2: per-key rate limiting for Groq/Gemini TPM budget protection.
+slowapi>=0.1.9,<1.0.0
+
+# ── PyTorch (CPU) ─────────────────────────────────────────────────────────────
+# H-13 FIX: torch was absent from requirements.txt — only installed by the
+# Dockerfile explicitly.  Any pip install -r requirements.txt path (CI, local
+# dev, fresh venv) produced an environment without torch, causing
+# long_term_memory._embed_cpu() to silently skip device management and hit
+# GPU contention on the RTX 3050 4GB.
+# CPU-only wheel keeps the install lightweight for non-GPU environments.
+# The Dockerfile overrides this with the pinned torch==2.3.1+cpu wheel from
+# the PyTorch index, so production image is unaffected.
+# P3-14 FIX: added <2.4.0 upper bound.  Without it, `pip install -r
+# requirements.txt` on a developer machine would resolve the latest PyTorch
+# (currently 2.6+), which has breaking changes to torch.cuda device
+# management APIs used by long_term_memory._embed_cpu().  The Dockerfile is
+# pinned to torch==2.3.1+cpu; the upper bound here keeps local dev consistent
+# with the production image.  Bump both together when upgrading PyTorch.
+torch>=2.3.1,<2.4.0

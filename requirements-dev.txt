@@ -1,0 +1,23 @@
+# ── Test framework ────────────────────────────────────────────────────────────
+pytest==8.2.0
+pytest-asyncio==0.23.6
+
+# ── Coverage ──────────────────────────────────────────────────────────────────
+# L6 FIX: required for --cov / --cov-fail-under gate in ci.yml.
+pytest-cov>=5.0.0
+
+# ── Test data generation ──────────────────────────────────────────────────────
+faker==24.9.0
+
+# ── Linting ───────────────────────────────────────────────────────────────────
+ruff==0.4.4
+
+# ── HTTP client for eval runner ───────────────────────────────────────────────
+# A-02 FIX: eval.py does `import httpx` at module level (line 38) to drive the
+# /query endpoint during evaluation runs.  httpx was absent from all requirements
+# files — any clean pip install produced an environment where `python eval.py run`
+# raised ImportError before reaching _cli(), making the eval runner silently
+# broken from every fresh install including CI and the Docker image.
+# Pinned to >=0.27.0 for compatibility with groq>=0.11.0 (which itself requires
+# httpx>=0.27.0 per its own dependency declaration).
+httpx>=0.27.0,<1.0.0

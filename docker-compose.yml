@@ -1,0 +1,190 @@
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  copilot_net:
+    driver: bridge
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  redis_data:
+  # model_cache intentionally removed: the BGE model is pre-downloaded on the
+  # host at ./data/model_cache. A named volume was empty on first boot causing
+  # the container to attempt a download from huggingface.co (no internet).
+  # Replaced with a bind mount in the api service below.
+  postgres_data:
+  # B-06 FIX: long-term memory index and metadata must survive container
+  # restarts.  Without this volume every store() write goes to the container's
+  # ephemeral writable layer and is discarded on `docker compose down`.
+  lt_memory_data:
+
+# ── Services ──────────────────────────────────────────────────────────────────
+services:
+
+  # ── Redis (session store) ──────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - copilot_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  # FIX: removed profiles: ["db"] — postgres was silently skipped on plain
+  # `docker compose up`, leaving the API connected to a non-existent hostname
+  # "postgres" in copilot_net. Now starts unconditionally with the stack.
+  # To use an external postgres instead, set DATABASE_URL in .env to point at
+  # host.docker.internal (already in ALLOWED_DB_HOSTS) and comment this out.
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      # H7 FIX: :? causes compose to fail immediately if POSTGRES_PASSWORD is
+      # unset, preventing silent deployment with a default credential.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env before starting}
+      POSTGRES_DB: ${POSTGRES_DB:-analyst_copilot}
+    # H-14 FIX: bind to loopback only — the API talks to postgres over
+    # copilot_net using the "postgres" service hostname and never needs
+    # this host port.  Binding to 0.0.0.0:5432 previously allowed any
+    # process on the host (or external connection if the firewall permitted
+    # it) to reach the database directly, bypassing all application-level
+    # access controls.  127.0.0.1 restricts access to the local host only.
+    # Remove this ports block entirely if host-side admin access is not needed.
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - copilot_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── API server ────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Overrides — safe to hardcode since these are container-internal values.
+      # FIX: REDIS_URL uses service-name DNS (redis) not 127.0.0.1, which is
+      # unreachable from inside the container.
+      REDIS_URL: redis://redis:6379/0
+      # FIX: DATABASE_URL uses service-name DNS (postgres). Resolves only while
+      # the postgres container is running in copilot_net — guaranteed by the
+      # depends_on condition below.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-analyst_copilot}
+      APP_HOST: "0.0.0.0"
+      APP_PORT: "8000"
+      APP_ENV: "production"
+      # Force HuggingFace libraries into offline mode — the container has no
+      # internet access. The model is served from the bind-mounted host cache.
+      # Without these flags, sentence-transformers retries huggingface.co 5
+      # times on every startup before falling back, adding ~40s delay and
+      # eventually crashing when the cache is stale or absent.
+      TRANSFORMERS_OFFLINE: "1"
+      HF_DATASETS_OFFLINE: "1"
+      HF_HUB_OFFLINE: "1"
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    volumes:
+      # FAISS index and embed_cache.json persist on the host between restarts.
+      - ./data/faiss_index:/app/data/faiss_index
+      # Bind mount the host model cache — the BGE model is already downloaded
+      # at ./data/model_cache/models--BAAI--bge-large-en-v1.5/.
+      # A named volume was empty on first boot (no internet to download).
+      # Read-only (:ro) — the container never needs to write to the model cache.
+      - ./data/model_cache:/app/data/model_cache:ro
+      # B-06 FIX: persist long-term memory across container restarts.
+      # Every successful query turn writes to /app/data/lt_memory/ via
+      # LongTermMemory.save().  Without this mount those writes are lost
+      # on `docker compose down`, making Phase 3 LTM retrieval useless.
+      - lt_memory_data:/app/data/lt_memory
+    networks:
+      - copilot_net
+    depends_on:
+      redis:
+        condition: service_healthy
+      # FIX: api now waits for postgres to be healthy before starting.
+      # Previously there was no dependency — api started against a missing
+      # postgres, produced a running-but-broken container with no startup error.
+      postgres:
+        condition: service_healthy
+    # H8 FIX: add memory limits so OOM events are contained and logged
+    # rather than killing the host silently.
+    # Steady-state footprint: bge-large (~1.3 GB) + DataFrame cache (512 MB)
+    # + Python runtime (~200 MB) ≈ 2.0 GB.  3 GB limit provides headroom for
+    # burst loads without exhausting a 4 GB host.
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+        reservations:
+          memory: 1G
+    # start_period covers BAAI/bge-large-en-v1.5 warmup (~40s first boot)
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request, sys; r = urllib.request.urlopen('http://localhost:8000/health', timeout=5); sys.exit(0 if r.status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
+
+  # ── Dev-only: API with hot-reload ─────────────────────────────────────────
+  # Usage: docker compose --profile dev up api-dev
+  api-dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-analyst_copilot}
+      APP_HOST: "0.0.0.0"
+      APP_PORT: "8000"
+      APP_ENV: "development"
+      UVICORN_RELOAD: "true"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_DATASETS_OFFLINE: "1"
+      HF_HUB_OFFLINE: "1"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./analyst_copilot:/app/analyst_copilot
+      - ./app.py:/app/app.py
+      - ./main.py:/app/main.py
+      - ./data/faiss_index:/app/data/faiss_index
+      - ./data/model_cache:/app/data/model_cache:ro
+      - lt_memory_data:/app/data/lt_memory
+    networks:
+      - copilot_net
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    # P3-12 FIX: api-dev had no memory limits.  Without them, the bge-large
+    # model (~1.3 GB), DataFrame cache (512 MB), hot-reload reloader process,
+    # and live code mount overhead can silently OOM a shared dev server with
+    # no visible error until the kernel OOM-killer fires.
+    # Slightly higher than production (3G) to accommodate the uvicorn reloader
+    # process and the live bind-mounted source tree.
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G

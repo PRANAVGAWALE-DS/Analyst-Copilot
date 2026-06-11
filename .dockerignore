@@ -1,0 +1,60 @@
+# ── Git ───────────────────────────────────────────────────────────────────────
+.git
+.github
+.gitignore
+.gitattributes
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Python cache ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+venv_ANALYST_COPILOT/
+
+# ── Test / dev / CI ───────────────────────────────────────────────────────────
+tests/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ── Scripts (data generation / load test — not needed at runtime) ─────────────
+scripts/
+
+# ── Docs / markdown ───────────────────────────────────────────────────────────
+docs/
+*.md
+
+# ── Data (mounted as volumes at runtime — never bake into the image) ──────────
+data/
+logs/
+*.log
+
+# ── Compose / CI config (not needed inside the image) ────────────────────────
+docker-compose*.yml
+.github/
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+project_tree.txt

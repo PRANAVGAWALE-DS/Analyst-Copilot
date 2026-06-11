@@ -1,0 +1,114 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+# P3-13 FIX: was "setuptools.backends.legacy:build".
+# The legacy backend is deprecated since setuptools 61.0 and will eventually
+# be removed.  setuptools.build_meta is the current standard entry point and
+# is a drop-in replacement with identical behaviour for this project.
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "analyst-copilot"
+version = "0.1.0"
+description = "LLM-powered data analyst copilot with RAG over tabular schemas"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "Proprietary" }
+
+dependencies = [
+    # Keep in sync with requirements.txt
+    # DEP-A FIX: fastapi 0.110.0 pins starlette 0.36.x, whose TestClient passes
+    # app= as a kwarg to httpx.Client.__init__(). httpx 0.28.0 (required by
+    # groq>=0.11.0) removed that kwarg, so every TestClient(app, ...) call raises
+    # TypeError. fastapi>=0.115.0 pulls starlette>=0.41.0 which rewrote TestClient
+    # to use the httpx transport API — compatible with httpx 0.28+.
+    "fastapi>=0.115.0,<0.116.0",
+    # DEP-A FIX: relaxed to >=0.30.0 to match fastapi 0.115.x test matrix.
+    # The prior pin (0.29.0) predates starlette 0.41 and may have minor
+    # lifecycle-event ordering differences with the updated lifespan handling.
+    "uvicorn[standard]>=0.30.0,<0.35.0",
+    "pydantic==2.7.0",
+    "python-dotenv==1.0.1",
+    "google-genai==1.0.0",
+    # M-13 FIX: upper bound mirrors requirements.txt — prevents a breaking
+    # groq major-version release entering the image silently on rebuild.
+    "groq>=0.11.0,<1.0.0",
+    "tiktoken==0.6.0",
+    "sentence-transformers==3.0.1",
+    "faiss-cpu==1.8.0",
+    "sqlglot==23.9.0",
+    "sqlalchemy==2.0.29",
+    "psycopg2-binary==2.9.9",
+    "aiosqlite==0.20.0",
+    "pandas==2.2.2",
+    "numpy==1.26.4",
+    "pyarrow==16.0.0",
+    # DEP-3 FIX: upper bound added — <4.0.0 prevents unintentional major-version upgrade.
+    "openpyxl>=3.1.0,<4.0.0",
+    "redis==5.0.4",
+    "tqdm==4.66.2",
+    # Required by FastAPI UploadFile / multipart form handling (/upload endpoint)
+    "python-multipart>=0.0.9",
+    # DEP-2 FIX: per-key rate limiting — protects Groq/Gemini TPM budget.
+    # M-13 FIX: upper bound mirrors requirements.txt.
+    "slowapi>=0.1.9,<1.0.0",
+    # H-13 FIX: torch required by long_term_memory._embed_cpu() for device
+    # management on the RTX 3050 4GB.  CPU-only wheel; Dockerfile overrides
+    # with the pinned torch==2.3.1+cpu wheel from the PyTorch index.
+    "torch>=2.3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.2.0",
+    "pytest-asyncio==0.23.6",
+    "faker==24.9.0",
+    "ruff==0.4.4",
+    # L6 FIX: pytest-cov required for --cov / --cov-fail-under in ci.yml.
+    "pytest-cov>=5.0.0",
+    # DEP-A FIX: httpx>=0.28.0 required by groq>=0.11.0; starlette>=0.41.0
+    # (pulled by fastapi>=0.115.0) supports httpx 0.28+ in TestClient.
+    "httpx>=0.28.0,<1.0.0",
+]
+
+[project.scripts]
+analyst-copilot = "main:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["analyst_copilot*"]
+
+# ── Ruff ──────────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]   # line length handled by formatter
+
+[tool.ruff.lint.isort]
+known-first-party = ["analyst_copilot"]
+
+# ── Pytest ────────────────────────────────────────────────────────────────────
+# M10 FIX: pytest.ini and pyproject.toml [tool.pytest.ini_options] previously
+# co-existed. pytest.ini takes precedence, so pyproject.toml settings were
+# silently ignored. All settings are now consolidated here.
+# ACTION REQUIRED: delete pytest.ini from the repo root — it is superseded
+# by this section. Any divergence between the two files caused unpredictable
+# test-collection behaviour depending on which file pytest found first.
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# M11 FIX (reflected here too): pythonpath makes analyst_copilot/ importable
+# as a flat namespace inside tests without needing conftest.py sys.path hacks.
+pythonpath = ["analyst_copilot"]
+filterwarnings = [
+    "ignore:There is no current event loop:DeprecationWarning:pytest_asyncio\\.plugin",
+]
+# Coverage baseline: 38% (measured). Raise ~5pp per sprint as new tests land.
+# Target: 38 → 50 (test_prompts + test_dataframe_store) → 65 (test_retrieval)
+#      → 70 (test_orchestrator happy paths)
+addopts = "--cov=analyst_copilot --cov-report=term-missing --cov-fail-under=38"
