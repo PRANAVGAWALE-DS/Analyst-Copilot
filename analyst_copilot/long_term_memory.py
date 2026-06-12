@@ -40,7 +40,7 @@ import threading
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -138,7 +138,7 @@ class LongTermMemory:
         # The set is populated in load() and appended in store().
         self._dedup_keys: set[str] = set()
 
-    def _embed_cpu(self, text: str) -> np.ndarray:
+    def _embed_cpu(self, text: str) -> "np.ndarray[Any, Any]":
         """
         Embed a single query string, forcing the sentence-transformers model
         onto CPU before calling encode(), then restoring the original device.
@@ -167,21 +167,33 @@ class LongTermMemory:
         _model = getattr(self._embedder, "_model", None)
         if _model is None:
             # Gemini or other HTTP-based embedder — no GPU contention
-            return self._embedder.embed_query(text).reshape(1, -1).astype(np.float32)
+            return cast(
+                "np.ndarray[Any, Any]",
+                self._embedder.embed_query(text).reshape(1, -1).astype(np.float32),
+            )
 
         try:
             original_device = next(_model.parameters()).device
             if original_device.type == "cpu":
                 # Already on CPU — no movement needed
-                return self._embedder.embed_query(text).reshape(1, -1).astype(np.float32)
+                return cast(
+                    "np.ndarray[Any, Any]",
+                    self._embedder.embed_query(text).reshape(1, -1).astype(np.float32),
+                )
             _model.to("cpu")
             try:
-                return self._embedder.embed_query(text).reshape(1, -1).astype(np.float32)
+                return cast(
+                    "np.ndarray[Any, Any]",
+                    self._embedder.embed_query(text).reshape(1, -1).astype(np.float32),
+                )
             finally:
                 _model.to(original_device)
         except Exception:  # noqa: BLE001
             # Device movement failed — try direct call as last resort
-            return self._embedder.embed_query(text).reshape(1, -1).astype(np.float32)
+            return cast(
+                "np.ndarray[Any, Any]",
+                self._embedder.embed_query(text).reshape(1, -1).astype(np.float32),
+            )
 
     # ── Index paths ───────────────────────────────────────────────────────────
 
@@ -265,7 +277,7 @@ class LongTermMemory:
             # as faiss.write_index() but writes to a numpy uint8 array,
             # letting us safely release the lock before touching the filesystem.
             index_bytes: bytes = faiss.serialize_index(self._index).tobytes()
-            records_snapshot: list[dict] = [asdict(r) for r in self._records]
+            records_snapshot: list[dict[str, Any]] = [asdict(r) for r in self._records]
 
         # ── Phase 2: write to disk outside lock (search() is unblocked) ──────
         self._dir.mkdir(parents=True, exist_ok=True)
@@ -274,10 +286,14 @@ class LongTermMemory:
         try:
             with open(tmp_index, "wb") as fh:
                 fh.write(index_bytes)
-            tmp_index.replace(self._index_path)  # WIN-01 FIX: replace() overwrites on Windows
+            tmp_index.replace(
+                self._index_path
+            )  # WIN-01 FIX: replace() overwrites on Windows
             with open(tmp_meta, "w") as fh:
                 json.dump(records_snapshot, fh)
-            tmp_meta.replace(self._meta_path)  # WIN-01 FIX: replace() overwrites on Windows
+            tmp_meta.replace(
+                self._meta_path
+            )  # WIN-01 FIX: replace() overwrites on Windows
         finally:
             # Clean up temp files if rename failed (e.g. disk-full crash)
             for _p in (tmp_index, tmp_meta):
@@ -325,7 +341,7 @@ class LongTermMemory:
                 return False
 
             vec = self._embed_cpu(nl_query)
-            self._index.add(vec)  # type: ignore[arg-type]
+            self._index.add(vec)  # type: ignore[union-attr]
 
             record = MemoryRecord(
                 record_id=dedup_key[:16],
@@ -408,7 +424,9 @@ class LongTermMemory:
                     # Device is already on CPU from the block above; no extra round-trip.
                     vecs = np.vstack(
                         [
-                            self._embedder.embed_query(t).reshape(1, -1).astype(np.float32)
+                            self._embedder.embed_query(t)
+                            .reshape(1, -1)
+                            .astype(np.float32)
                             for t in live_texts
                         ]
                     )
@@ -419,7 +437,7 @@ class LongTermMemory:
                         and _orig_device.type != "cpu"
                     ):
                         _model.to(_orig_device)
-                new_index.add(vecs)  # type: ignore[arg-type]
+                new_index.add(vecs)
             self._index = new_index
             self._dirty = True
 
@@ -454,11 +472,11 @@ class LongTermMemory:
                 return []
 
             vec = self._embed_cpu(nl_query)
-            self._index.hnsw.efSearch = HNSW_EF_SEARCH
+            self._index.hnsw.efSearch = HNSW_EF_SEARCH  # type: ignore[union-attr]
 
             # Search with larger k and post-filter to schema_id + staleness
             search_k = min(k * 5, len(self._records))
-            distances, indices = self._index.search(vec, search_k)  # type: ignore[arg-type]
+            distances, indices = self._index.search(vec, search_k)  # type: ignore[union-attr]
 
             active_set = set(active_indices)
             results: list[MemorySearchResult] = []
@@ -511,7 +529,9 @@ class LongTermMemory:
             # but breaks silently if any record uses the 'Z' suffix variant.
             cutoff_dt = _cutoff_timestamp()
             live_records = [
-                r for r in self._records if datetime.fromisoformat(r.created_at) >= cutoff_dt
+                r
+                for r in self._records
+                if datetime.fromisoformat(r.created_at) >= cutoff_dt
             ]
             live_texts = [r.nl_query for r in live_records]
 
@@ -533,7 +553,9 @@ class LongTermMemory:
                     # the store() path which calls _embed_cpu() → embed_query().
                     vecs = np.vstack(
                         [
-                            self._embedder.embed_query(t).reshape(1, -1).astype(np.float32)
+                            self._embedder.embed_query(t)
+                            .reshape(1, -1)
+                            .astype(np.float32)
                             for t in live_texts
                         ]
                     )
@@ -544,7 +566,7 @@ class LongTermMemory:
                         and _orig_device.type != "cpu"
                     ):
                         _model.to(_orig_device)
-                new_index.add(vecs)  # type: ignore[arg-type]
+                new_index.add(vecs)
 
             self._index = new_index
             self._records = live_records

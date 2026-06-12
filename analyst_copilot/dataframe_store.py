@@ -198,7 +198,7 @@ class DataFrameStore:
 
         # Sanitise column names (strip whitespace)
         original_cols = list(df.columns)
-        df.columns = [str(c).strip() for c in df.columns]
+        df.columns = pd.Index([str(c).strip() for c in df.columns])
         renamed = [o for o, n in zip(original_cols, df.columns, strict=False) if o != n]
         if renamed:
             warnings.append(
@@ -301,12 +301,15 @@ class DataFrameStore:
 
     def _session_size_mb(self, session_id: str) -> float:
         frames = self._store.get(session_id, {})
-        return sum(df.memory_usage(deep=True).sum() for df in frames.values()) / (1024 * 1024)
+        total = int(sum(df.memory_usage(deep=True).sum() for df in frames.values()))
+        return total / (1024 * 1024)
 
     def _evict_expired(self) -> None:
         """Lazy TTL eviction — runs on every get() call."""
         now = time.monotonic()
-        expired = [sid for sid, last in self._last_access.items() if now - last > self._ttl]
+        expired = [
+            sid for sid, last in self._last_access.items() if now - last > self._ttl
+        ]
         for sid in expired:
             self._store.pop(sid, None)
             self._last_access.pop(sid, None)

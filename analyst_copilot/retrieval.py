@@ -33,7 +33,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import tiktoken as _tiktoken
@@ -175,7 +175,9 @@ class SchemaEmbedder:
         cache_dir: str | Path = "data/faiss_index",
         batch_size: int = 64,
     ) -> None:
-        self._model_name = model_name or os.environ.get("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
+        self._model_name: str = model_name or os.environ.get(
+            "EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5"
+        )
         self._cache_path = Path(cache_dir) / _EMBED_CACHE_FILENAME
         self._legacy_cache_path = Path("data") / _EMBED_CACHE_FILENAME
         self._batch_size = batch_size
@@ -240,7 +242,7 @@ class SchemaEmbedder:
         self._load_model()
         self._load_cache()
 
-    def embed(self, texts: list[str]) -> np.ndarray:
+    def embed(self, texts: list[str]) -> "np.ndarray[Any, Any]":
         """Embed a list of strings. Returns shape (N, D) float32 ndarray."""
         self._load_model()
         self._load_cache()
@@ -257,21 +259,22 @@ class SchemaEmbedder:
 
         return np.array([self._cache[k] for k in keys], dtype=np.float32)
 
-    def embed_query(self, query: str) -> np.ndarray:
-        return self.embed([query])[0]
+    def embed_query(self, query: str) -> "np.ndarray[Any, Any]":
+        return cast("np.ndarray[Any, Any]", self.embed([query])[0])
 
-    def _embed_batch(self, texts: list[str]) -> np.ndarray:
+    def _embed_batch(self, texts: list[str]) -> "np.ndarray[Any, Any]":
         if self._is_gemini:
             return self._normalize_l2(self._embed_gemini(texts))
-        return self._model.encode(
+        encoded = self._model.encode(
             texts,
             batch_size=self._batch_size,
             show_progress_bar=False,
             normalize_embeddings=True,
             convert_to_numpy=True,
-        ).astype(np.float32)
+        )
+        return cast("np.ndarray[Any, Any]", encoded.astype(np.float32))
 
-    def _embed_gemini(self, texts: list[str]) -> np.ndarray:
+    def _embed_gemini(self, texts: list[str]) -> "np.ndarray[Any, Any]":
         import os
 
         from google import genai
@@ -304,7 +307,7 @@ class SchemaEmbedder:
             vecs.extend([embedding.values or [] for embedding in embeddings])
         return np.array(vecs, dtype=np.float32)
 
-    def _normalize_l2(self, vecs: np.ndarray) -> np.ndarray:
+    def _normalize_l2(self, vecs: "np.ndarray[Any, Any]") -> "np.ndarray[Any, Any]":
         """
         H5 FIX: L2-normalise embedding vectors in-place.
         FAISS HNSW with METRIC_INNER_PRODUCT equals cosine similarity ONLY for
@@ -316,7 +319,7 @@ class SchemaEmbedder:
         """
         norms = np.linalg.norm(vecs, axis=1, keepdims=True)
         norms = np.where(norms == 0.0, 1.0, norms)
-        return vecs / norms
+        return cast("np.ndarray[Any, Any]", vecs / norms)
 
     @property
     def dimension(self) -> int:
@@ -331,7 +334,7 @@ class SchemaEmbedder:
             # caller using .dimension to set a FAISS index size to build a
             # mis-sized index.
             return int(os.environ.get("EMBEDDING_DIM", "1024"))
-        return self._model.get_sentence_embedding_dimension()
+        return int(self._model.get_sentence_embedding_dimension())
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +369,9 @@ class FAISSIndexer:
         self._index_dir = Path(index_dir)
         self._dimension = dimension
         self._indices: dict[str, Any] = {}  # schema_id → faiss.Index
-        self._chunk_meta: dict[str, list[dict]] = {}  # schema_id → list of chunk dicts
+        self._chunk_meta: dict[str, list[dict[str, Any]]] = (
+            {}
+        )  # schema_id → list of chunk dicts
 
     def _index_path(self, schema_id: str) -> Path:
         return self._index_dir / f"{schema_id}.faiss"
@@ -390,7 +395,7 @@ class FAISSIndexer:
     def add(
         self,
         schema_id: str,
-        embeddings: np.ndarray,
+        embeddings: "np.ndarray[Any, Any]",
         chunks: list[dict[str, Any]],
         force: bool = False,
     ) -> None:
@@ -410,7 +415,9 @@ class FAISSIndexer:
 
         self._index_dir.mkdir(parents=True, exist_ok=True)
         if embeddings.ndim != 2:
-            raise ValueError(f"Embeddings must be a 2-D array, got shape {embeddings.shape}.")
+            raise ValueError(
+                f"Embeddings must be a 2-D array, got shape {embeddings.shape}."
+            )
         # C3-adjacent FIX: correct self._dimension BEFORE passing it to
         # IndexHNSWFlat.  The old order set self._dimension after constructing
         # the index, meaning wrong: EMBEDDING_DIM=768 while model outputs 1024
@@ -422,9 +429,11 @@ class FAISSIndexer:
         # Build HNSW index — use METRIC_INNER_PRODUCT so ranking is equivalent
         # to cosine similarity for normalized vectors (sentence-transformers
         # normalizes by default). Consistent with LongTermMemory._new_index().
-        index = faiss.IndexHNSWFlat(self._dimension, self._HNSW_M, faiss.METRIC_INNER_PRODUCT)
+        index = faiss.IndexHNSWFlat(
+            self._dimension, self._HNSW_M, faiss.METRIC_INNER_PRODUCT
+        )
         index.hnsw.efConstruction = self._HNSW_EF_CONSTRUCTION
-        index.add(embeddings.astype(np.float32))  # type: ignore[arg-type]
+        index.add(embeddings.astype(np.float32))
 
         # Persist
         faiss.write_index(index, str(self._index_path(schema_id)))
@@ -451,7 +460,7 @@ class FAISSIndexer:
     def search(
         self,
         schema_id: str,
-        query_vec: np.ndarray,
+        query_vec: "np.ndarray[Any, Any]",
         k: int = 5,
     ) -> list[dict[str, Any]]:
         """
@@ -467,7 +476,7 @@ class FAISSIndexer:
         index = self._indices[schema_id]
         index.hnsw.efSearch = self._HNSW_EF_SEARCH
         q = query_vec.reshape(1, -1).astype(np.float32)
-        distances, indices = index.search(q, k)  # type: ignore[arg-type]
+        distances, indices = index.search(q, k)
 
         meta = self._chunk_meta.get(schema_id, [])
         results: list[dict[str, Any]] = []
@@ -513,9 +522,15 @@ def build_chunks(profile: SchemaProfile) -> list[dict[str, Any]]:
             col_lines = []
             columns_meta: list[dict[str, str | None]] = []
             for col in _tbl.columns:
-                null_s = f", null_rate={col.null_rate:.1%}" if col.null_rate is not None else ""
+                null_s = (
+                    f", null_rate={col.null_rate:.1%}"
+                    if col.null_rate is not None
+                    else ""
+                )
                 card_s = (
-                    f", cardinality≈{col.cardinality_estimate}" if col.cardinality_estimate else ""
+                    f", cardinality≈{col.cardinality_estimate}"
+                    if col.cardinality_estimate
+                    else ""
                 )
                 if include_samples:
                     samples = col.sample_values
@@ -538,7 +553,9 @@ def build_chunks(profile: SchemaProfile) -> list[dict[str, Any]]:
                 columns_meta.append(
                     {
                         "name": col.name,
-                        "description": (col.column_description if include_descriptions else None),
+                        "description": (
+                            col.column_description if include_descriptions else None
+                        ),
                     }
                 )
 
@@ -566,7 +583,9 @@ def build_chunks(profile: SchemaProfile) -> list[dict[str, Any]]:
 
         # --- Token-capped build: three passes ---
         # Pass 1: full fidelity
-        text, columns_meta, _ = _build_text(tbl, include_descriptions=True, include_samples=True)
+        text, columns_meta, _ = _build_text(
+            tbl, include_descriptions=True, include_samples=True
+        )
         if _count_chunk_tokens(text) > _CHUNK_TOKEN_CAP:
             # Pass 2: strip column descriptions
             text, columns_meta, _ = _build_text(
@@ -690,7 +709,7 @@ class RetrievalLayer:
             meta_path = self._indexer._meta_path(schema_id)
             try:
                 with open(meta_path) as f:
-                    chunks: list[dict] = json.load(f)
+                    chunks: list[dict[str, Any]] = json.load(f)
             except Exception:  # noqa: BLE001
                 continue
 
@@ -699,7 +718,8 @@ class RetrievalLayer:
                 tbl_name = chunk.get("table_name", "")
                 col_names: list[str] = chunk.get("column_names", [])
                 columns = [
-                    ColumnMeta(name=c, data_type="unknown", nullable=True) for c in col_names
+                    ColumnMeta(name=c, data_type="unknown", nullable=True)
+                    for c in col_names
                 ]
                 fks = [
                     {"from_column": "", "to_table": to_tbl, "to_column": ""}
@@ -744,8 +764,12 @@ class RetrievalLayer:
         import asyncio
 
         loop = asyncio.get_running_loop()
-        query_vec = await loop.run_in_executor(None, self._embedder.embed_query, nl_query)
-        raw_chunks = await loop.run_in_executor(None, self._indexer.search, schema_id, query_vec, k)
+        query_vec = await loop.run_in_executor(
+            None, self._embedder.embed_query, nl_query
+        )
+        raw_chunks = await loop.run_in_executor(
+            None, self._indexer.search, schema_id, query_vec, k
+        )
 
         if not raw_chunks:
             return []
@@ -866,13 +890,19 @@ class IngestionPipeline:
             }
 
         all_tables = inspector.get_table_names()
-        tables = [t for t in all_tables if t in table_allowlist] if table_allowlist else all_tables
+        tables = (
+            [t for t in all_tables if t in table_allowlist]
+            if table_allowlist
+            else all_tables
+        )
 
         table_metas: list[TableMeta] = []
         with engine.connect() as conn:
             for tbl_name in tables:
                 try:
-                    meta = self._profile_table(conn, inspector, tbl_name, dialect, pii_set)
+                    meta = self._profile_table(
+                        conn, inspector, tbl_name, dialect, pii_set
+                    )
                     if table_description_overrides:
                         meta.business_description = table_description_overrides.get(
                             tbl_name, meta.business_description
@@ -887,7 +917,9 @@ class IngestionPipeline:
                 except Exception as exc:  # noqa: BLE001
                     warnings.append(f"Failed to profile '{tbl_name}': {exc}")
 
-        profile = SchemaProfile(schema_id=schema_id, dialect=dialect, tables=table_metas)
+        profile = SchemaProfile(
+            schema_id=schema_id, dialect=dialect, tables=table_metas
+        )
         self._registry.put(schema_id, profile)
 
         chunks = build_chunks(profile)
@@ -960,9 +992,13 @@ class IngestionPipeline:
 
         fks = [
             {
-                "from_column": (fk["constrained_columns"][0] if fk["constrained_columns"] else ""),
+                "from_column": (
+                    fk["constrained_columns"][0] if fk["constrained_columns"] else ""
+                ),
                 "to_table": fk["referred_table"],
-                "to_column": (fk["referred_columns"][0] if fk["referred_columns"] else ""),
+                "to_column": (
+                    fk["referred_columns"][0] if fk["referred_columns"] else ""
+                ),
             }
             for fk in raw_fks
             if fk.get("constrained_columns") and fk.get("referred_columns")

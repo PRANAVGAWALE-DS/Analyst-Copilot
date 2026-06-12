@@ -35,7 +35,7 @@ import time
 import tracemalloc
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pandas as pd
 import sqlglot
@@ -337,7 +337,9 @@ class _ForbiddenNodeVisitor(ast.NodeVisitor):
                 ValidationResult(
                     valid=False,
                     error_type="FORBIDDEN_IMPORT",
-                    error_message=(f"Import from '{module}' is not on the allowed-imports list."),
+                    error_message=(
+                        f"Import from '{module}' is not on the allowed-imports list."
+                    ),
                     error_line=node.lineno,
                 )
             )
@@ -370,7 +372,9 @@ class _ForbiddenNodeVisitor(ast.NodeVisitor):
                     ValidationResult(
                         valid=False,
                         error_type="FORBIDDEN_BUILTIN",
-                        error_message=(f"Access to '{node.func.attr}' is not permitted."),
+                        error_message=(
+                            f"Access to '{node.func.attr}' is not permitted."
+                        ),
                         error_line=node.lineno,
                     )
                 )
@@ -948,7 +952,9 @@ class PreExecutionPolicy:
 
     def __init__(self, table_policies: dict[str, TablePolicy]) -> None:
         # Keyed by lowercase table name
-        self._policies: dict[str, TablePolicy] = {k.lower(): v for k, v in table_policies.items()}
+        self._policies: dict[str, TablePolicy] = {
+            k.lower(): v for k, v in table_policies.items()
+        }
 
     def check(self, sql: str, dialect: str = "postgres") -> ValidationResult:
         """
@@ -1173,7 +1179,9 @@ def execute_sql(
         with engine.connect() as conn:
             cursor_result = conn.execute(text(sql))
             columns = list(cursor_result.keys())
-            rows = cursor_result.fetchmany(_ROW_CAP + 1)  # fetch one extra to detect cap
+            rows = cursor_result.fetchmany(
+                _ROW_CAP + 1
+            )  # fetch one extra to detect cap
 
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         capped = len(rows) > _ROW_CAP
@@ -1199,7 +1207,9 @@ def execute_sql(
                 return v.hex()
             return v
 
-        result_dicts = [{k: _coerce(val) for k, val in row.items()} for row in result_dicts]
+        result_dicts = [
+            {k: _coerce(val) for k, val in row.items()} for row in result_dicts
+        ]
 
         # Payload size guard
         payload_bytes = len(json.dumps(result_dicts, default=str).encode())
@@ -1262,7 +1272,9 @@ def execute_sql(
         # ERROR_CORRECT_SYSTEM_PROMPT RULE 2, causing the LLM to echo back
         # "SYNTAX_ERROR" which then fails Pydantic validation and converts a
         # retryable error into an immediate TERMINAL_ERROR.
-        normalised_type = _EXEC_ERROR_TYPE_MAP.get(type(exc).__name__, type(exc).__name__)
+        normalised_type = _EXEC_ERROR_TYPE_MAP.get(
+            type(exc).__name__, type(exc).__name__
+        )
         return ExecutionResult(
             success=False,
             error_type=normalised_type,
@@ -1370,7 +1382,9 @@ def execute_python(
         t0 = time.monotonic()
         tracemalloc.start()
         try:
-            exec(compile(code, "<analyst_copilot>", "exec"), exec_namespace)  # noqa: S102
+            exec(
+                compile(code, "<analyst_copilot>", "exec"), exec_namespace
+            )  # noqa: S102
         except MemoryError:
             return ExecutionResult(
                 success=False,
@@ -1382,7 +1396,9 @@ def execute_python(
             )
         except Exception as exc:
             tb_lines = traceback_lines(exc)
-            normalised_type = _EXEC_ERROR_TYPE_MAP.get(type(exc).__name__, type(exc).__name__)
+            normalised_type = _EXEC_ERROR_TYPE_MAP.get(
+                type(exc).__name__, type(exc).__name__
+            )
             return ExecutionResult(
                 success=False,
                 error_type=normalised_type,
@@ -1625,7 +1641,9 @@ def validate_metric_ranges(
                 if r.get(col) is not None and not (lo <= float(r[col]) <= hi)
             ]
             if bad:
-                violations.append(f"'{col}': values {bad[:3]} outside [{lo}, {hi}] — {note}")
+                violations.append(
+                    f"'{col}': values {bad[:3]} outside [{lo}, {hi}] — {note}"
+                )
             else:
                 # Near-zero dominance check: all values are within the valid
                 # range but suspiciously close to zero.  Root cause: per-row
@@ -2054,7 +2072,9 @@ class ExecutionLoop:
 
         if code_type == "sql":
             assert self._engine is not None, "Engine required for SQL execution."
-            exec_result = execute_sql(code, self._engine, timeout_seconds=self._sql_timeout)
+            exec_result = execute_sql(
+                code, self._engine, timeout_seconds=self._sql_timeout
+            )
         else:
             exec_result = execute_python(
                 code,
@@ -2084,9 +2104,15 @@ class ExecutionLoop:
             # Normalise Pandas output to list[dict] for validate_result
             df_result = exec_result.dataframe
             if isinstance(df_result, pd.DataFrame):
-                result_rows = df_result.head(_ROW_CAP).to_dict(orient="records")
+                result_rows = cast(
+                    list[dict[str, Any]],
+                    df_result.head(_ROW_CAP).to_dict(orient="records"),
+                )
             elif isinstance(df_result, pd.Series):
-                result_rows = df_result.reset_index().to_dict(orient="records")
+                result_rows = cast(
+                    list[dict[str, Any]],
+                    df_result.reset_index().to_dict(orient="records"),
+                )
             else:
                 # Scalar result — wrap so validate_result sees a non-empty list
                 result_rows = [{"result": df_result}]
