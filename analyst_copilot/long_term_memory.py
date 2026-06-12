@@ -138,7 +138,7 @@ class LongTermMemory:
         # The set is populated in load() and appended in store().
         self._dedup_keys: set[str] = set()
 
-    def _embed_cpu(self, text: str) -> "np.ndarray[Any, Any]":
+    def _embed_cpu(self, text: str) -> np.ndarray[Any, Any]:
         """
         Embed a single query string, forcing the sentence-transformers model
         onto CPU before calling encode(), then restoring the original device.
@@ -286,14 +286,10 @@ class LongTermMemory:
         try:
             with open(tmp_index, "wb") as fh:
                 fh.write(index_bytes)
-            tmp_index.replace(
-                self._index_path
-            )  # WIN-01 FIX: replace() overwrites on Windows
+            tmp_index.replace(self._index_path)  # WIN-01 FIX: replace() overwrites on Windows
             with open(tmp_meta, "w") as fh:
                 json.dump(records_snapshot, fh)
-            tmp_meta.replace(
-                self._meta_path
-            )  # WIN-01 FIX: replace() overwrites on Windows
+            tmp_meta.replace(self._meta_path)  # WIN-01 FIX: replace() overwrites on Windows
         finally:
             # Clean up temp files if rename failed (e.g. disk-full crash)
             for _p in (tmp_index, tmp_meta):
@@ -424,9 +420,7 @@ class LongTermMemory:
                     # Device is already on CPU from the block above; no extra round-trip.
                     vecs = np.vstack(
                         [
-                            self._embedder.embed_query(t)
-                            .reshape(1, -1)
-                            .astype(np.float32)
+                            self._embedder.embed_query(t).reshape(1, -1).astype(np.float32)
                             for t in live_texts
                         ]
                     )
@@ -529,9 +523,7 @@ class LongTermMemory:
             # but breaks silently if any record uses the 'Z' suffix variant.
             cutoff_dt = _cutoff_timestamp()
             live_records = [
-                r
-                for r in self._records
-                if datetime.fromisoformat(r.created_at) >= cutoff_dt
+                r for r in self._records if datetime.fromisoformat(r.created_at) >= cutoff_dt
             ]
             live_texts = [r.nl_query for r in live_records]
 
@@ -553,9 +545,7 @@ class LongTermMemory:
                     # the store() path which calls _embed_cpu() → embed_query().
                     vecs = np.vstack(
                         [
-                            self._embedder.embed_query(t)
-                            .reshape(1, -1)
-                            .astype(np.float32)
+                            self._embedder.embed_query(t).reshape(1, -1).astype(np.float32)
                             for t in live_texts
                         ]
                     )
