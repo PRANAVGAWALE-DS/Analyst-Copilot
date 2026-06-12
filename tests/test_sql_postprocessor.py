@@ -182,7 +182,7 @@ class TestW1FanoutDetection:
     def test_no_w1_without_sum_aggregate(self):
         """P3-D fix: pure row-level join on fan-out tables must not trigger W1."""
         sql = """
-            SELECT p.policy_id, c.claim_id, pay.amount
+            SELECT p.policy_id, c.claim_id, pay.paid_amount
             FROM policies p
             JOIN claims   c   ON p.policy_id = c.policy_id
             JOIN payments pay ON c.claim_id  = pay.claim_id

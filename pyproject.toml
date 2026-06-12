@@ -16,16 +16,8 @@ license = { text = "Proprietary" }
 
 dependencies = [
     # Keep in sync with requirements.txt
-    # DEP-A FIX: fastapi 0.110.0 pins starlette 0.36.x, whose TestClient passes
-    # app= as a kwarg to httpx.Client.__init__(). httpx 0.28.0 (required by
-    # groq>=0.11.0) removed that kwarg, so every TestClient(app, ...) call raises
-    # TypeError. fastapi>=0.115.0 pulls starlette>=0.41.0 which rewrote TestClient
-    # to use the httpx transport API — compatible with httpx 0.28+.
-    "fastapi>=0.115.0,<0.116.0",
-    # DEP-A FIX: relaxed to >=0.30.0 to match fastapi 0.115.x test matrix.
-    # The prior pin (0.29.0) predates starlette 0.41 and may have minor
-    # lifecycle-event ordering differences with the updated lifespan handling.
-    "uvicorn[standard]>=0.30.0,<0.35.0",
+    "fastapi==0.110.0",
+    "uvicorn[standard]==0.29.0",
     "pydantic==2.7.0",
     "python-dotenv==1.0.1",
     "google-genai==1.0.0",
@@ -54,7 +46,11 @@ dependencies = [
     # H-13 FIX: torch required by long_term_memory._embed_cpu() for device
     # management on the RTX 3050 4GB.  CPU-only wheel; Dockerfile overrides
     # with the pinned torch==2.3.1+cpu wheel from the PyTorch index.
-    "torch>=2.3.1",
+    # P3-14 FIX: added <2.4.0 upper bound — without it `pip install -r
+    # requirements.txt` on a developer machine resolves the latest PyTorch
+    # (2.6+) which has breaking changes to torch.cuda device management APIs.
+    # Bump both this bound and the Dockerfile pin together when upgrading.
+    "torch>=2.3.1,<2.4.0",
 ]
 
 [project.optional-dependencies]
@@ -65,9 +61,9 @@ dev = [
     "ruff==0.4.4",
     # L6 FIX: pytest-cov required for --cov / --cov-fail-under in ci.yml.
     "pytest-cov>=5.0.0",
-    # DEP-A FIX: httpx>=0.28.0 required by groq>=0.11.0; starlette>=0.41.0
-    # (pulled by fastapi>=0.115.0) supports httpx 0.28+ in TestClient.
-    "httpx>=0.28.0,<1.0.0",
+    # A-02 FIX: eval.py imports httpx at module level for the /query eval runner.
+    # Previously absent from all requirements files — ImportError on every clean install.
+    "httpx>=0.27.0,<1.0.0",
 ]
 
 [project.scripts]
@@ -108,7 +104,11 @@ pythonpath = ["analyst_copilot"]
 filterwarnings = [
     "ignore:There is no current event loop:DeprecationWarning:pytest_asyncio\\.plugin",
 ]
-# Coverage baseline: 38% (measured). Raise ~5pp per sprint as new tests land.
-# Target: 38 → 50 (test_prompts + test_dataframe_store) → 65 (test_retrieval)
-#      → 70 (test_orchestrator happy paths)
-addopts = "--cov=analyst_copilot --cov-report=term-missing --cov-fail-under=38"
+# Coverage gate: 62% (measured 2026-06-11, coverage.py 7.14.1).
+# Per-module highlights: dataframe_loader 99%, dataframe_store 99%,
+# interfaces 98%, observability 97%, sql_postprocessor 81%,
+# long_term_memory 77%, orchestrator/retrieval/session_store/prompts/validation 60-62%.
+# eval.py is intentionally low (25%) — async HTTP runner, tested end-to-end only.
+# Raise gate by ~5pp per sprint as new tests land.
+# Next target: 65% (orchestrator ERROR_CORRECT paths + retrieval ingestion pipeline).
+addopts = "--cov=analyst_copilot --cov-report=term-missing --cov-fail-under=62"

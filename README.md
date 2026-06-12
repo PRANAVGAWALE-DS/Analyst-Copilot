@@ -102,7 +102,7 @@ Failed states re-enter at GENERATION via ERROR_CORRECT (max 3 attempts total).
 |---|---|
 | Query p50 latency (end-to-end, single user) | ~10 s |
 | Query p95 latency | ~15 s |
-| SQL generation accuracy (eval harness) | *run eval — see [Evaluation](#evaluation)* |
+| SQL generation accuracy (eval harness) | *pending — update after eval run completes* |
 | Embedding model cold-start (model cached) | ~3 s (`bge-small-en-v1.5`) |
 | DataFrame row limit per table (configurable) | 50,000 rows |
 | Groq on-demand daily token budget | 100K TPD (~9 queries/day) |
@@ -411,6 +411,27 @@ ruff format --check .
 # Auto-fix
 ruff check --fix . && ruff format .
 ```
+
+### Coverage (coverage.py 7.14.1 · measured 2026-06-11)
+
+**Overall: 62%** across 3,116 statements (1,947 covered, 1,169 missing, 24 excluded).
+
+| Module | Statements | Coverage | Notes |
+|---|---|---|---|
+| `dataframe_loader.py` | 95 | **99%** | |
+| `dataframe_store.py` | 97 | **99%** | |
+| `interfaces.py` | 111 | **98%** | |
+| `observability.py` | 95 | **97%** | |
+| `long_term_memory.py` | 222 | **77%** | TTL eviction + rebuild paths partially tested |
+| `sql_postprocessor.py` | 118 | **81%** | |
+| `orchestrator.py` | 678 | **62%** | ERROR_CORRECT retry paths and edge states untested |
+| `retrieval.py` | 394 | **62%** | IngestionPipeline profiling paths untested |
+| `session_store.py` | 130 | **62%** | Redis pipeline paths (mock-only) |
+| `prompts.py` | 222 | **60%** | Gemini path, streaming, budget edge cases |
+| `validation.py` | 484 | **61%** | Sandbox edge cases, dialect-specific SQL validators |
+| `eval.py` | 470 | **25%** | CLI runner paths — not exercised in unit tests |
+
+The 25% on `eval.py` is expected — the evaluation harness is an async HTTP client runner tested end-to-end, not in the unit suite. Coverage gate in CI is set to 62% (`--cov-fail-under=62` in `pyproject.toml`).
 
 ---
 

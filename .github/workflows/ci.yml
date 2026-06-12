@@ -203,18 +203,17 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
 
-      # L6 FIX: coverage gate set to the measured baseline (38%).
-      # Raise by ~5 pp per sprint as new test files land:
-      #   38% → 50%  add test_prompts.py + test_dataframe_store.py
-      #   50% → 65%  add test_retrieval.py
-      #   65% → 70%  add test_orchestrator.py (happy paths + mocked LLM)
+      # Coverage gate raised to 62% (measured 2026-06-11, coverage.py 7.14.1).
+      # Previous 38% baseline superseded — actual coverage is 62% across
+      # 3,116 statements.  Gate now enforces the real baseline so regressions
+      # are caught in CI.  Next target: 65% (orchestrator + retrieval paths).
       - name: Run tests with coverage
         run: |
           pytest tests/ -v --tb=short --asyncio-mode=auto \
             --cov=analyst_copilot \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
-            --cov-fail-under=38
+            --cov-fail-under=62
 
       - name: Upload coverage report
         if: always()
