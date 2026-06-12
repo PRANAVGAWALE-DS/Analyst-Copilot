@@ -84,9 +84,7 @@ class EvalReport:
     executable_ci_95: tuple[float, float]
     correctness_rate: float
     correctness_ci_95: tuple[float, float]
-    partial_correct_rate: (
-        float  # ML-5: 50–74% column overlap; distinct from full correct
-    )
+    partial_correct_rate: float  # ML-5: 50–74% column overlap; distinct from full correct
     error_recovery_rate: float
     schema_recall_at_5: float
     p50_latency_ms: float
@@ -380,9 +378,7 @@ def _introspect_sqlite(conn: sqlite3.Connection) -> dict[str, Any]:
         text_cols = [
             c[1]
             for c in cols
-            if "TEXT" in c[2].upper()
-            or "CHAR" in c[2].upper()
-            or "CLOB" in c[2].upper()
+            if "TEXT" in c[2].upper() or "CHAR" in c[2].upper() or "CLOB" in c[2].upper()
         ]
         categorical_cols = [c for c in text_cols if _is_categorical(c)]
 
@@ -394,8 +390,7 @@ def _introspect_sqlite(conn: sqlite3.Connection) -> dict[str, Any]:
                 # (e.g. "select", "order", "group") and names with spaces.
                 q_col = f'"{col}"'
                 rows = cursor.execute(
-                    f"SELECT DISTINCT {q_col} FROM {q_table} "
-                    f"WHERE {q_col} IS NOT NULL LIMIT 20"
+                    f"SELECT DISTINCT {q_col} FROM {q_table} " f"WHERE {q_col} IS NOT NULL LIMIT 20"
                 ).fetchall()
                 vals = [str(r[0]) for r in rows if r[0] is not None]
                 if vals:
@@ -418,9 +413,7 @@ def _introspect_sqlite(conn: sqlite3.Connection) -> dict[str, Any]:
             "text_cols": text_cols,
             "categorical_cols": categorical_cols,
             "cat_values": cat_values,
-            "date_cols": [
-                c[1] for c in cols if "DATE" in c[2].upper() or "TIME" in c[2].upper()
-            ],
+            "date_cols": [c[1] for c in cols if "DATE" in c[2].upper() or "TIME" in c[2].upper()],
         }
     return schema
 
@@ -506,9 +499,7 @@ def _instantiate_template(
     try:
         from validation import validate_sql
 
-        schema_columns = list(
-            {col for cols in (t.get("columns") or []) for col in [cols]}
-        )
+        schema_columns = list({col for cols in (t.get("columns") or []) for col in [cols]})
         vr = validate_sql(sql, schema_columns=schema_columns)
         if not vr.valid:
             import sys
@@ -587,9 +578,7 @@ async def run_evaluation(
         base_url=base_url, timeout=timeout_seconds, headers=headers
     ) as client:
         tasks = [
-            _evaluate_pair(
-                client, pair, semaphore, rate_limit_sleep_s=rate_limit_sleep_s
-            )
+            _evaluate_pair(client, pair, semaphore, rate_limit_sleep_s=rate_limit_sleep_s)
             for pair in test_pairs
         ]
         raw_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -837,9 +826,7 @@ def _expected_columns(sql: str) -> set[str]:
     for col_expr in _split_select_expressions(select_part):
         col_upper = col_expr.upper()
         if " AS " in col_upper:
-            alias = (
-                col_expr[col_upper.rfind(" AS ") + 4 :].strip().strip('"').strip("'")
-            )
+            alias = col_expr[col_upper.rfind(" AS ") + 4 :].strip().strip('"').strip("'")
             if alias:
                 cols.add(alias.lower())
         else:
@@ -1105,8 +1092,7 @@ _CANONICAL_CASES: list[CanonicalCase] = [
             "top-3 filter per region yields 5×3=15 rows."
         ),
         nl_query=(
-            "For each region, rank policy types by total claim amount "
-            "and return the top 3."
+            "For each region, rank policy types by total claim amount " "and return the top 3."
         ),
         schema_id="ins_prod_v3",
         expected_row_count=15,  # 5 regions × top-3 policy types
@@ -1143,9 +1129,7 @@ async def run_canonical(
         base_url=base_url, timeout=timeout_seconds, headers=headers
     ) as client:
         tasks = [
-            _evaluate_canonical_case(
-                client, case, rate_limit_sleep_s=rate_limit_sleep_s
-            )
+            _evaluate_canonical_case(client, case, rate_limit_sleep_s=rate_limit_sleep_s)
             for case in _CANONICAL_CASES
         ]
         raw_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1278,9 +1262,7 @@ async def _evaluate_canonical_case(
 def _cli() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Data Analyst Copilot — evaluation CLI"
-    )
+    parser = argparse.ArgumentParser(description="Data Analyst Copilot — evaluation CLI")
     sub = parser.add_subparsers(dest="command")
 
     gen = sub.add_parser("generate", help="Generate synthetic test pairs")
@@ -1292,9 +1274,7 @@ def _cli() -> None:
     run_p = sub.add_parser("run", help="Run evaluation against live server")
     run_p.add_argument("--pairs", required=True, help="Path to eval_pairs.json")
     run_p.add_argument("--url", default="http://localhost:8000")
-    run_p.add_argument(
-        "--split", default="test", choices=["train", "val", "test", "all"]
-    )
+    run_p.add_argument("--split", default="test", choices=["train", "val", "test", "all"])
     run_p.add_argument("--concurrency", type=int, default=5)
     run_p.add_argument("--output", default=None, help="Save report JSON to this path")
     # A-03 FIX: production deployments require X-API-Key (H-07 auth middleware).

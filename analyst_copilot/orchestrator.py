@@ -198,9 +198,7 @@ class SessionStore(Protocol):
         """Create a new session and return its ID."""
         ...
 
-    async def get_or_create(
-        self, session_id: str | None, schema_id: str = ""
-    ) -> str: ...
+    async def get_or_create(self, session_id: str | None, schema_id: str = "") -> str: ...
 
 
 # ---------------------------------------------------------------------------
@@ -338,20 +336,16 @@ def _extract_hard_constraints(chunks: list[SchemaChunk]) -> str:
     for chunk in chunks:
         if chunk.business_description and chunk.business_description.strip():
             lines.append(
-                f"CONSTRAINT {n} — {chunk.table} (table): "
-                f"{chunk.business_description.strip()}"
+                f"CONSTRAINT {n} — {chunk.table} (table): " f"{chunk.business_description.strip()}"
             )
             n += 1
         for col in chunk.columns:
             if col.description and col.description.strip():
                 lines.append(
-                    f"CONSTRAINT {n} — {chunk.table}.{col.name}: "
-                    f"{col.description.strip()}"
+                    f"CONSTRAINT {n} — {chunk.table}.{col.name}: " f"{col.description.strip()}"
                 )
                 n += 1
-    return (
-        "\n".join(lines) if lines else "No schema-specific constraints for this query."
-    )
+    return "\n".join(lines) if lines else "No schema-specific constraints for this query."
 
 
 # ---------------------------------------------------------------------------
@@ -449,14 +443,12 @@ class Orchestrator:
         # eviction: once _RESULT_CACHE_MAX_SESSIONS is reached, the oldest
         # session is dropped before inserting the new one.
         _max = int(os.environ.get("RESULT_CACHE_MAX_SESSIONS", "1000"))
-        self._result_cache: collections.OrderedDict[
-            str, collections.deque[dict[str, Any]]
-        ] = collections.OrderedDict()
+        self._result_cache: collections.OrderedDict[str, collections.deque[dict[str, Any]]] = (
+            collections.OrderedDict()
+        )
         self._result_cache_max: int = _max
         # Gap-10: feature flag for LTM exact-hit bypass (skips full LLM generation).
-        self._use_lt_exact_hit = (
-            os.environ.get("USE_LT_EXACT_HIT", "false").lower() == "true"
-        )
+        self._use_lt_exact_hit = os.environ.get("USE_LT_EXACT_HIT", "false").lower() == "true"
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -602,11 +594,7 @@ class Orchestrator:
                         uploaded_refs = self._df_store.get(state.session_id)
 
                     # Merge: uploaded takes precedence over DB-loaded
-                    df_refs = (
-                        {**db_refs, **uploaded_refs}
-                        if (db_refs or uploaded_refs)
-                        else None
-                    )
+                    df_refs = {**db_refs, **uploaded_refs} if (db_refs or uploaded_refs) else None
 
                 # P2-07 FIX: if Pandas mode was selected (by keyword or
                 # explicit execution_mode) but neither source has any
@@ -670,8 +658,7 @@ class Orchestrator:
                             if state.error:
                                 break
                             _skip_generation = bool(
-                                state.active_code
-                                and state.active_code != _code_before_correction
+                                state.active_code and state.active_code != _code_before_correction
                             )
                             continue
                         else:
@@ -693,9 +680,7 @@ class Orchestrator:
                         # is reached before inserting a new one.
                         if len(self._result_cache) >= self._result_cache_max:
                             self._result_cache.popitem(last=False)
-                        self._result_cache[state.session_id] = collections.deque(
-                            maxlen=3
-                        )
+                        self._result_cache[state.session_id] = collections.deque(maxlen=3)
                     else:
                         # Touch: move to end so it is the most-recently-used entry.
                         self._result_cache.move_to_end(state.session_id)
@@ -705,8 +690,7 @@ class Orchestrator:
                             "code_type": state.code_type,
                             "result_preview": (
                                 state.execution_result.result[:10]
-                                if state.execution_result
-                                and state.execution_result.result
+                                if state.execution_result and state.execution_result.result
                                 else []
                             ),
                         }
@@ -715,11 +699,14 @@ class Orchestrator:
 
                 # Determine if retryable
                 state.attempt_records = loop_result.attempt_history
-                if loop_result.final_error_type in (
-                    "POLICY_VIOLATION",
-                    "MUTATION_STATEMENT",
-                    "DB_UNAVAILABLE",  # DB connection failure — not fixable by LLM
-                    "EXECUTION_TIMEOUT",  # infrastructure/runtime timeout; do not ask LLM to rewrite blindly
+                if (
+                    loop_result.final_error_type
+                    in (
+                        "POLICY_VIOLATION",
+                        "MUTATION_STATEMENT",
+                        "DB_UNAVAILABLE",  # DB connection failure — not fixable by LLM
+                        "EXECUTION_TIMEOUT",  # infrastructure/runtime timeout; do not ask LLM to rewrite blindly
+                    )
                 ):
                     # Not retryable — go straight to terminal error
                     state.error = ErrorDetail(
@@ -745,9 +732,7 @@ class Orchestrator:
                 if loop_result.final_error_type == "UNRESOLVED_COLUMN":
                     unresolved = loop_result.unresolved_columns
                     if unresolved:
-                        close = _fuzzy_match_columns(
-                            unresolved, state.schema_columns, cutoff=0.85
-                        )
+                        close = _fuzzy_match_columns(unresolved, state.schema_columns, cutoff=0.85)
                         if not any(close.get(u) for u in unresolved):
                             state.error = ErrorDetail(
                                 error_code="TERMINAL_ERROR",
@@ -767,9 +752,7 @@ class Orchestrator:
                         # Take single best match per column (matches[0]).
                         # _fuzzy_match_columns returns dict[str, list[str]];
                         # _error_correct expects dict[str, str | None].
-                        _column_hints = {
-                            col: m[0] if m else None for col, m in close.items()
-                        }
+                        _column_hints = {col: m[0] if m else None for col, m in close.items()}
 
                 if loop_result.final_error_type == "EMPTY_RESULT":
                     # Escalate to INTAKE for clarification — not an ERROR_CORRECT case
@@ -833,11 +816,7 @@ class Orchestrator:
                     )
 
             # RESULT_CHECK + INSIGHT (if execution succeeded)
-            if (
-                state.error is None
-                and state.execution_result
-                and state.execution_result.success
-            ):
+            if state.error is None and state.execution_result and state.execution_result.success:
                 await self._result_check(state)
                 # _result_check sets state.insight directly when IMPLAUSIBLE_VALUE
                 # is detected (null-dominant metric columns). A non-empty string
@@ -907,9 +886,7 @@ class Orchestrator:
             if static_insight:
                 state.insight = static_insight
             else:
-                with contextlib.suppress(
-                    Exception
-                ):  # _build_response fallback covers this
+                with contextlib.suppress(Exception):  # _build_response fallback covers this
                     state.insight = await self._llm.generate_insight(
                         nl_query=state.nl_query_clean,
                         result_preview=[],
@@ -920,16 +897,13 @@ class Orchestrator:
                     )
 
         latency_ms = int((time.monotonic() - t0) * 1000)
-        terminal = (
-            "TERMINAL_ERROR" if state.error else state.terminal_state or "TERMINAL"
-        )
+        terminal = "TERMINAL_ERROR" if state.error else state.terminal_state or "TERMINAL"
 
         self._obs.record_turn_outcome(
             turn_id=state.turn_id,
             terminal_state=terminal,
             latency_ms=latency_ms,
-            executable=state.execution_result is not None
-            and state.execution_result.success,
+            executable=state.execution_result is not None and state.execution_result.success,
             hit_max_retries=state.attempt_count >= MAX_ATTEMPTS - 1,
             schema_id=state.schema_id or "",
             code_type=state.code_type or "",
@@ -958,16 +932,11 @@ class Orchestrator:
             if injection_detected:
                 state.error = ErrorDetail(
                     error_code="POLICY_VIOLATION",
-                    message=(
-                        "Your query contains characters I can't process. "
-                        "Please rephrase."
-                    ),
+                    message=("Your query contains characters I can't process. " "Please rephrase."),
                 )
                 tl.set_output({"injection_detected": True})
             else:
-                tl.set_output(
-                    {"injection_detected": False, "cleaned_length": len(clean)}
-                )
+                tl.set_output({"injection_detected": False, "cleaned_length": len(clean)})
 
     async def _retrieval_state(self, state: TurnState) -> None:
         """
@@ -982,9 +951,7 @@ class Orchestrator:
             # Concurrent retrieval + session load (Section 9.3 async pattern)
             try:
                 chunks, history, schema_columns, table_policies = await asyncio.gather(
-                    self._retrieval.retrieve(
-                        state.nl_query_clean, state.schema_id, k=5
-                    ),
+                    self._retrieval.retrieve(state.nl_query_clean, state.schema_id, k=5),
                     self._sessions.get_history(state.session_id, n=10),
                     self._retrieval.get_schema_columns(state.schema_id),
                     self._retrieval.get_table_policies(state.schema_id),
@@ -1024,9 +991,7 @@ class Orchestrator:
             state.prior_results = list(cached) if cached else []
 
             # Apply token budget enforcement
-            trimmed_chunks, trimmed_history, total_tokens = enforce_token_budget(
-                chunks, history
-            )
+            trimmed_chunks, trimmed_history, total_tokens = enforce_token_budget(chunks, history)
             state.chunks = trimmed_chunks
             state.session_history = trimmed_history
 
@@ -1085,9 +1050,7 @@ class Orchestrator:
                         # MemoryRecord has no code_type field — infer from content.
                         _inferred_type: Literal["sql", "pandas"] = (
                             "pandas"
-                            if cached_code.lstrip().startswith(
-                                ("df", "import", "result =")
-                            )
+                            if cached_code.lstrip().startswith(("df", "import", "result ="))
                             and "SELECT" not in cached_code.upper()
                             else "sql"
                         )
@@ -1099,9 +1062,7 @@ class Orchestrator:
                             state.generated_code = None
                         state.code_type = _inferred_type
                         state.terminal_state = "VALIDATION"  # skip to VALIDATION
-                        state.lt_exact_hit_used = (
-                            True  # mark for _result_check invalidation
-                        )
+                        state.lt_exact_hit_used = True  # mark for _result_check invalidation
                         tl.set_output(
                             {
                                 "chunks_returned": len(state.chunks),
@@ -1113,9 +1074,7 @@ class Orchestrator:
                         )
                         return  # bypass GENERATION
 
-                state.lt_examples = (
-                    lt_examples  # consumed by _generation prompt renderer
-                )
+                state.lt_examples = lt_examples  # consumed by _generation prompt renderer
 
                 tl.set_output(
                     {
@@ -1199,9 +1158,7 @@ class Orchestrator:
             if gen_resp.parse_error:
                 state.error = ErrorDetail(
                     error_code="LLM_PARSE_ERROR",
-                    message=(
-                        "I received an unexpected response format. Retrying automatically."
-                    ),
+                    message=("I received an unexpected response format. Retrying automatically."),
                 )
                 tl.set_output({"parse_error": gen_resp.parse_error})
                 return
@@ -1212,9 +1169,7 @@ class Orchestrator:
             if isinstance(parsed, GenerateSQLOutput | GeneratePandasOutput):
                 if parsed.error_code == "UNRESOLVED_REFERENCE":
                     unresolved = parsed.unresolved
-                    close_matches = _fuzzy_match_columns(
-                        unresolved, state.schema_columns
-                    )
+                    close_matches = _fuzzy_match_columns(unresolved, state.schema_columns)
                     state.error = ErrorDetail(
                         error_code="UNRESOLVED_REFERENCE",
                         message=_unresolved_message(unresolved, close_matches),
@@ -1247,9 +1202,7 @@ class Orchestrator:
                         context=json.dumps(parsed.assumptions),
                     )
                     state.terminal_state = "INTAKE"
-                    tl.set_output(
-                        {"low_confidence": True, "confidence": parsed.confidence}
-                    )
+                    tl.set_output({"low_confidence": True, "confidence": parsed.confidence})
                     return
 
             if isinstance(parsed, GenerateSQLOutput) and parsed.sql:
@@ -1267,9 +1220,7 @@ class Orchestrator:
                     # W1 fan-out requires LLM regeneration (AST rewrite cannot
                     # restructure CTEs). Store the hint so run() can route to
                     # _error_correct_postprocessor before ExecutionLoop runs.
-                    state.postprocessor_hint = (
-                        _pp.retry_hint if _pp.needs_retry else None
-                    )
+                    state.postprocessor_hint = _pp.retry_hint if _pp.needs_retry else None
                 except Exception:  # noqa: BLE001
                     pass  # post-processor failure must never block execution
 
@@ -1288,9 +1239,7 @@ class Orchestrator:
                     )
                     state.error = ErrorDetail(
                         error_code="UNRESOLVED_REFERENCE",
-                        message=_unresolved_message(
-                            gc.unresolved_references, close_matches
-                        ),
+                        message=_unresolved_message(gc.unresolved_references, close_matches),
                     )
                     tl.set_output(
                         {
@@ -1324,17 +1273,15 @@ class Orchestrator:
                     flags=re.I,
                 )
                 for _intent_re, _sql_re, _fn_name in _AGG_INTENT_MAP:
-                    if _intent_re.search(_nl_for_agg) and not _sql_re.search(
-                        parsed.sql
-                    ):
+                    if _intent_re.search(_nl_for_agg) and not _sql_re.search(parsed.sql):
                         # BUG-04 FIX: _intent_re matched _nl_for_agg (the
                         # sort-phrase-stripped version) but may not match
                         # nl_query_clean if the intent keyword was adjacent to
                         # a stripped phrase at a word boundary.  Use the first
                         # non-None match to avoid AttributeError on .group(0).
-                        _raw_match = _intent_re.search(
-                            state.nl_query_clean
-                        ) or _intent_re.search(_nl_for_agg)
+                        _raw_match = _intent_re.search(state.nl_query_clean) or _intent_re.search(
+                            _nl_for_agg
+                        )
                         if _raw_match is None:
                             continue
                         _matched_word = _raw_match.group(0)
@@ -1360,9 +1307,7 @@ class Orchestrator:
                 state.generated_code = parsed.code
                 state.generation_confidence = parsed.confidence
                 state.generation_assumptions = parsed.assumptions
-                tl.set_output(
-                    {"code_length": len(parsed.code), "confidence": parsed.confidence}
-                )
+                tl.set_output({"code_length": len(parsed.code), "confidence": parsed.confidence})
 
             else:
                 # LLM returned valid JSON that parsed without error but contained no
@@ -1381,9 +1326,7 @@ class Orchestrator:
                     )
                     tl.set_output({"empty_response": True})
 
-    async def _error_correct_postprocessor(
-        self, state: TurnState, attempt: int
-    ) -> None:
+    async def _error_correct_postprocessor(self, state: TurnState, attempt: int) -> None:
         """
         Targeted correction pass for W1 postprocessor fan-out warnings.
 
@@ -1523,9 +1466,7 @@ class Orchestrator:
             error_line="",
         )
 
-        response_model = (
-            GenerateSQLOutput if state.code_type == "sql" else GeneratePandasOutput
-        )
+        response_model = GenerateSQLOutput if state.code_type == "sql" else GeneratePandasOutput
 
         with TraceLogger(
             self._obs.trace_store,
@@ -1632,9 +1573,8 @@ class Orchestrator:
                 if good and bad != good
             ]
             if suggestions:
-                error_message += (
-                    "\nColumn name corrections (use these exact names):\n"
-                    + "\n".join(suggestions)
+                error_message += "\nColumn name corrections (use these exact names):\n" + "\n".join(
+                    suggestions
                 )
 
         # Inject per-table column listing for UNRESOLVED_COLUMN.
@@ -1647,16 +1587,13 @@ class Orchestrator:
             table_cols: dict[str, list[str]] = {}
             for chunk in state.chunks:
                 if chunk.table and chunk.columns:
-                    table_cols.setdefault(chunk.table, []).extend(
-                        col.name for col in chunk.columns
-                    )
+                    table_cols.setdefault(chunk.table, []).extend(col.name for col in chunk.columns)
             if table_cols:
                 error_message += (
                     "\nExact columns available per table"
                     " (use ONLY column names from this list):\n"
                     + "\n".join(
-                        f"  {tbl}: {', '.join(cols)}"
-                        for tbl, cols in sorted(table_cols.items())
+                        f"  {tbl}: {', '.join(cols)}" for tbl, cols in sorted(table_cols.items())
                     )
                 )
 
@@ -1672,9 +1609,7 @@ class Orchestrator:
             error_line="",
         )
 
-        response_model = (
-            GenerateSQLOutput if state.code_type == "sql" else GeneratePandasOutput
-        )
+        response_model = GenerateSQLOutput if state.code_type == "sql" else GeneratePandasOutput
 
         with TraceLogger(
             self._obs.trace_store,
@@ -1810,9 +1745,7 @@ class Orchestrator:
                 state.result_warnings.append(rt.message)
                 state.insight = rt.message
                 state.terminal_state = "TERMINAL"
-                tl.set_output(
-                    {"issue": "IMPLAUSIBLE_VALUE", "insight_suppressed": True}
-                )
+                tl.set_output({"issue": "IMPLAUSIBLE_VALUE", "insight_suppressed": True})
                 return
 
             # Compute analytical metrics before INSIGHT so the LLM receives
@@ -1824,9 +1757,7 @@ class Orchestrator:
             # Degrade gracefully to an empty dict; the LLM falls back to describing
             # result_preview directly, which is an acceptable degradation.
             try:
-                state.result_metrics = _compute_result_metrics(
-                    rows, nl_query=state.nl_query_clean
-                )
+                state.result_metrics = _compute_result_metrics(rows, nl_query=state.nl_query_clean)
             except Exception:  # noqa: BLE001
                 state.result_metrics = {}
 
@@ -1852,9 +1783,7 @@ class Orchestrator:
                             state.schema_id,
                             state.nl_query_clean,
                         )
-                tl.set_output(
-                    {"issue": "METRIC_OUT_OF_RANGE", "insight_suppressed": True}
-                )
+                tl.set_output({"issue": "METRIC_OUT_OF_RANGE", "insight_suppressed": True})
                 return
 
             tl.set_output(
@@ -2047,9 +1976,7 @@ def _fuzzy_match_columns(
     result: dict[str, list[str]] = {}
     cols_lower = {c.lower(): c for c in known_columns}
     for term in unresolved:
-        matches = difflib.get_close_matches(
-            term.lower(), cols_lower.keys(), n=n, cutoff=cutoff
-        )
+        matches = difflib.get_close_matches(term.lower(), cols_lower.keys(), n=n, cutoff=cutoff)
         result[term] = [cols_lower[m] for m in matches]
     return result
 
@@ -2067,9 +1994,7 @@ def _unresolved_message(
                 f"Did you mean one of: {', '.join(suggestions)}?"
             )
         else:
-            parts.append(
-                f"I couldn't find a column or table matching '{term}' in the schema."
-            )
+            parts.append(f"I couldn't find a column or table matching '{term}' in the schema.")
     return " ".join(parts)
 
 
@@ -2218,18 +2143,14 @@ def _compute_result_metrics(
                 _cf[_t] = _cf.get(_t, 0) + 1
 
         def _col_score(col: str) -> float:
-            return sum(
-                _tf.get(t, 0) / _cf.get(t, 1) for t in re.split(r"[_\s]+", col.lower())
-            )
+            return sum(_tf.get(t, 0) / _cf.get(t, 1) for t in re.split(r"[_\s]+", col.lower()))
 
         _scores = {c: _col_score(c) for c in candidates}
         _best = max(_scores.values())
         if _best > 0:
             # Stable tie-breaking: among equal-scoring candidates, prefer
             # the one with the lower original column index.
-            value_col = max(
-                candidates, key=lambda c: (_scores[c], -candidates.index(c))
-            )
+            value_col = max(candidates, key=lambda c: (_scores[c], -candidates.index(c)))
         else:
             value_col = candidates[0]
     else:
@@ -2273,9 +2194,7 @@ def _compute_result_metrics(
                     _gsums[_g] = _gsums.get(_g, 0.0) + float(_v)
                     _gn[_g] = _gn.get(_g, 0) + 1
             _analysis_rows = [
-                {group_col: _g, value_col: _gsums[_g] / _gn[_g]}
-                for _g in _gsums
-                if _gn[_g] > 0
+                {group_col: _g, value_col: _gsums[_g] / _gn[_g]} for _g in _gsums if _gn[_g] > 0
             ]
 
     # Extract values, skipping nulls and any non-numeric strings.
@@ -2344,8 +2263,7 @@ def _compute_result_metrics(
     # it doesn't round differently or invent a different multiplier.
     if ratio is not None and ratio >= 1.5 and group_col:
         metrics["ratio_sentence"] = (
-            f"{top_group} {value_col} is {ratio}× larger than "
-            f"{bottom_group} {value_col}"
+            f"{top_group} {value_col} is {ratio}× larger than " f"{bottom_group} {value_col}"
         )
 
     # Full ranked list — surfaces all groups in descending order.

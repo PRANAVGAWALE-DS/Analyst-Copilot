@@ -307,9 +307,7 @@ class DataFrameStore:
     def _evict_expired(self) -> None:
         """Lazy TTL eviction — runs on every get() call."""
         now = time.monotonic()
-        expired = [
-            sid for sid, last in self._last_access.items() if now - last > self._ttl
-        ]
+        expired = [sid for sid, last in self._last_access.items() if now - last > self._ttl]
         for sid in expired:
             self._store.pop(sid, None)
             self._last_access.pop(sid, None)

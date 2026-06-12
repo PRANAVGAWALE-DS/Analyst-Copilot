@@ -142,8 +142,7 @@ class DataFrameLoader:
     def cache_stats(self) -> dict[str, Any]:
         """Return in-process cache statistics for the /health endpoint."""
         total_mb = sum(
-            entry.df.memory_usage(deep=True).sum() / 1_048_576
-            for entry in self._cache.values()
+            entry.df.memory_usage(deep=True).sum() / 1_048_576 for entry in self._cache.values()
         )
         return {
             "cached_tables": len(self._cache),
@@ -200,8 +199,7 @@ class DataFrameLoader:
             self._inflight.pop(cache_key, None)
             # Check memory ceiling before caching
             current_mb = sum(
-                e.df.memory_usage(deep=True).sum() / 1_048_576
-                for e in self._cache.values()
+                e.df.memory_usage(deep=True).sum() / 1_048_576 for e in self._cache.values()
             )
             new_mb = df.memory_usage(deep=True).sum() / 1_048_576
             if current_mb + new_mb <= _MAX_MEMORY_MB:
@@ -221,9 +219,7 @@ class DataFrameLoader:
         try:
             return self._load_from_db(table, limit)
         except Exception as db_exc:  # noqa: BLE001
-            self._warn(
-                f"DB load failed for '{table}' ({db_exc}), trying file fallback."
-            )
+            self._warn(f"DB load failed for '{table}' ({db_exc}), trying file fallback.")
 
         # File fallback
         if self._file_root:

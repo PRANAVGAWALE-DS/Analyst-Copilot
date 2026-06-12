@@ -1091,9 +1091,7 @@ class PromptRenderer:
 # Token budget enforcement
 # ---------------------------------------------------------------------------
 
-_ENCODER = tiktoken.get_encoding(
-    "cl100k_base"
-)  # cl100k_base; approximate token count for Gemini
+_ENCODER = tiktoken.get_encoding("cl100k_base")  # cl100k_base; approximate token count for Gemini
 
 TOKEN_BUDGET = {
     "schema_context": 6_000,  # increased: business_description + column notes need room
@@ -1127,9 +1125,7 @@ def enforce_token_budget(
     history = list(session_history)
 
     def _estimate() -> int:
-        chunk_tokens = count_tokens(
-            json.dumps([c.model_dump() for c in chunks], default=str)
-        )
+        chunk_tokens = count_tokens(json.dumps([c.model_dump() for c in chunks], default=str))
         history_tokens = count_tokens(json.dumps(history, default=str))
         return chunk_tokens + history_tokens + system_prompt_tokens
 
@@ -1152,12 +1148,10 @@ def enforce_token_budget(
         for c in chunks:
             cols_with_desc = [col.name for col in c.columns if col.description]
             if cols_with_desc:
-                stripped_cols_by_schema.setdefault(
-                    getattr(c, "schema_id", "unknown"), []
-                ).extend(cols_with_desc)
-            new_cols = [
-                col.model_copy(update={"description": None}) for col in c.columns
-            ]
+                stripped_cols_by_schema.setdefault(getattr(c, "schema_id", "unknown"), []).extend(
+                    cols_with_desc
+                )
+            new_cols = [col.model_copy(update={"description": None}) for col in c.columns]
             stripped_chunks.append(c.model_copy(update={"columns": new_cols}))
         chunks = stripped_chunks
 
@@ -1265,9 +1259,7 @@ class GenerationResponse(BaseModel):
     completion_tokens: int = 0
     latency_ms: int = 0
     model: str = ""
-    parse_error: str | None = (
-        None  # populated if JSON parse or Pydantic validation fails
-    )
+    parse_error: str | None = None  # populated if JSON parse or Pydantic validation fails
 
 
 class LLMClient:
@@ -1348,13 +1340,9 @@ class LLMClient:
                 content = response.text or ""
                 usage = response.usage_metadata
                 prompt_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
-                completion_tokens = (
-                    getattr(usage, "candidates_token_count", 0) if usage else 0
-                )
+                completion_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
 
-                parsed, parse_error = self._parse_response(
-                    content, request.response_model
-                )
+                parsed, parse_error = self._parse_response(content, request.response_model)
 
                 return GenerationResponse(
                     content=content,
@@ -1578,8 +1566,7 @@ class GroqLLMClient(LLMClient):
             import groq as _groq
         except ImportError as exc:
             raise ImportError(
-                "groq package is required for GroqLLMClient. "
-                "Install it with: pip install groq"
+                "groq package is required for GroqLLMClient. " "Install it with: pip install groq"
             ) from exc
         self._groq_client = _groq.AsyncGroq(api_key=api_key)
         self._default_model = default_model
@@ -1612,18 +1599,14 @@ class GroqLLMClient(LLMClient):
         _retryable = (
             self._groq_mod.RateLimitError,  # 429 — transient
             self._groq_mod.APIConnectionError,  # network error — transient
-            *(
-                [_internal_server_err] if _internal_server_err is not None else []
-            ),  # 500
+            *([_internal_server_err] if _internal_server_err is not None else []),  # 500
         )
 
         last_exc: Exception | None = None
         for attempt in range(_MAX_LLM_RETRIES):
             try:
                 t0 = time.monotonic()
-                response = await self._groq_client.chat.completions.create(
-                    **call_kwargs
-                )
+                response = await self._groq_client.chat.completions.create(**call_kwargs)
                 latency_ms = int((time.monotonic() - t0) * 1000)
 
                 content = response.choices[0].message.content or ""
@@ -1631,9 +1614,7 @@ class GroqLLMClient(LLMClient):
                 prompt_tokens = usage.prompt_tokens if usage else 0
                 completion_tokens = usage.completion_tokens if usage else 0
 
-                parsed, parse_error = self._parse_response(
-                    content, request.response_model
-                )
+                parsed, parse_error = self._parse_response(content, request.response_model)
 
                 return GenerationResponse(
                     content=content,

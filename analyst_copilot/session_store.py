@@ -57,9 +57,7 @@ class RedisSessionStore:
 
         import redis.asyncio as aioredis
 
-        url: str = (
-            redis_url or os.environ.get("REDIS_URL") or "redis://localhost:6379/0"
-        )
+        url: str = redis_url or os.environ.get("REDIS_URL") or "redis://localhost:6379/0"
         # socket_connect_timeout + socket_timeout cap the TCP handshake and
         # per-command wait. Without these, an unreachable Redis host (e.g. when
         # running `docker run` standalone without --network) causes the startup
@@ -213,9 +211,7 @@ class InMemorySessionStore:
     def _evict_expired(self) -> None:
         """Lazy TTL eviction — runs on every get_history() call."""
         now = time.monotonic()
-        expired = [
-            sid for sid, last in self._last_access.items() if now - last > self._ttl
-        ]
+        expired = [sid for sid, last in self._last_access.items() if now - last > self._ttl]
         for sid in expired:
             self._sessions.pop(sid, None)
             self._turns.pop(sid, None)
@@ -297,9 +293,7 @@ async def build_session_store(
     import os
     import sys
 
-    url = (
-        redis_url if redis_url is not None else os.environ.get("REDIS_URL", "")
-    ).strip()
+    url = (redis_url if redis_url is not None else os.environ.get("REDIS_URL", "")).strip()
     if not url:
         fallback = InMemorySessionStore()
         print(

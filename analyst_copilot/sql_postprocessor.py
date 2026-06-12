@@ -279,10 +279,7 @@ def _warn_fanout(tree: exp.Expression) -> list[str]:
     # find_all() is depth-first on the full tree; CTE bodies contain their own
     # FROM clauses whose table references must not pollute the outer table set.
     cte_body_tables: set[str] = {
-        t.name.lower()
-        for cte in tree.find_all(exp.CTE)
-        for t in cte.find_all(exp.Table)
-        if t.name
+        t.name.lower() for cte in tree.find_all(exp.CTE) for t in cte.find_all(exp.Table) if t.name
     }
     all_tables = {t.name.lower() for t in tree.find_all(exp.Table) if t.name}
     outer_tables = all_tables - cte_body_tables
