@@ -33,7 +33,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import tiktoken as _tiktoken
@@ -57,6 +57,10 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 #   2. Strip sample_values next (nice-to-have context).
 #   3. Column names and data types are NEVER truncated.
 _CHUNK_TOKEN_CAP = 400
+# Maximum extra chunks injected by the FK-join expansion in
+# RetrievalLayer.retrieve().  Kept small to bound prompt-token growth;
+# two extra chunks covers the vast majority of two-table JOIN queries.
+_FK_EXPANSION_MAX = 2
 # Encoder is initialised lazily on first call to _count_chunk_tokens().
 # This prevents a startup crash when the tiktoken cache file hasn't been
 # downloaded yet (e.g. first container boot without the Dockerfile pre-warm).
@@ -175,8 +179,10 @@ class SchemaEmbedder:
         cache_dir: str | Path = "data/faiss_index",
         batch_size: int = 64,
     ) -> None:
-        self._model_name: str = model_name or os.environ.get(
-            "EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5"
+        self._model_name: str = (
+            model_name
+            if model_name is not None
+            else (os.environ.get("EMBEDDING_MODEL") or "BAAI/bge-large-en-v1.5")
         )
         self._cache_path = Path(cache_dir) / _EMBED_CACHE_FILENAME
         self._legacy_cache_path = Path("data") / _EMBED_CACHE_FILENAME
@@ -242,7 +248,7 @@ class SchemaEmbedder:
         self._load_model()
         self._load_cache()
 
-    def embed(self, texts: list[str]) -> np.ndarray[Any, Any]:
+    def embed(self, texts: list[str]) -> np.ndarray:
         """Embed a list of strings. Returns shape (N, D) float32 ndarray."""
         self._load_model()
         self._load_cache()
@@ -259,22 +265,21 @@ class SchemaEmbedder:
 
         return np.array([self._cache[k] for k in keys], dtype=np.float32)
 
-    def embed_query(self, query: str) -> np.ndarray[Any, Any]:
-        return cast("np.ndarray[Any, Any]", self.embed([query])[0])
+    def embed_query(self, query: str) -> np.ndarray:
+        return self.embed([query])[0]
 
-    def _embed_batch(self, texts: list[str]) -> np.ndarray[Any, Any]:
+    def _embed_batch(self, texts: list[str]) -> np.ndarray:
         if self._is_gemini:
             return self._normalize_l2(self._embed_gemini(texts))
-        encoded = self._model.encode(
+        return self._model.encode(
             texts,
             batch_size=self._batch_size,
             show_progress_bar=False,
             normalize_embeddings=True,
             convert_to_numpy=True,
-        )
-        return cast("np.ndarray[Any, Any]", encoded.astype(np.float32))
+        ).astype(np.float32)
 
-    def _embed_gemini(self, texts: list[str]) -> np.ndarray[Any, Any]:
+    def _embed_gemini(self, texts: list[str]) -> np.ndarray:
         import os
 
         from google import genai
@@ -307,7 +312,7 @@ class SchemaEmbedder:
             vecs.extend([embedding.values or [] for embedding in embeddings])
         return np.array(vecs, dtype=np.float32)
 
-    def _normalize_l2(self, vecs: np.ndarray[Any, Any]) -> np.ndarray[Any, Any]:
+    def _normalize_l2(self, vecs: np.ndarray) -> np.ndarray:
         """
         H5 FIX: L2-normalise embedding vectors in-place.
         FAISS HNSW with METRIC_INNER_PRODUCT equals cosine similarity ONLY for
@@ -319,7 +324,7 @@ class SchemaEmbedder:
         """
         norms = np.linalg.norm(vecs, axis=1, keepdims=True)
         norms = np.where(norms == 0.0, 1.0, norms)
-        return cast("np.ndarray[Any, Any]", vecs / norms)
+        return vecs / norms
 
     @property
     def dimension(self) -> int:
@@ -334,7 +339,7 @@ class SchemaEmbedder:
             # caller using .dimension to set a FAISS index size to build a
             # mis-sized index.
             return int(os.environ.get("EMBEDDING_DIM", "1024"))
-        return int(self._model.get_sentence_embedding_dimension())
+        return self._model.get_sentence_embedding_dimension()
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +374,7 @@ class FAISSIndexer:
         self._index_dir = Path(index_dir)
         self._dimension = dimension
         self._indices: dict[str, Any] = {}  # schema_id → faiss.Index
-        self._chunk_meta: dict[str, list[dict[str, Any]]] = {}  # schema_id → list of chunk dicts
+        self._chunk_meta: dict[str, list[dict]] = {}  # schema_id → list of chunk dicts
 
     def _index_path(self, schema_id: str) -> Path:
         return self._index_dir / f"{schema_id}.faiss"
@@ -393,7 +398,7 @@ class FAISSIndexer:
     def add(
         self,
         schema_id: str,
-        embeddings: np.ndarray[Any, Any],
+        embeddings: np.ndarray,
         chunks: list[dict[str, Any]],
         force: bool = False,
     ) -> None:
@@ -427,7 +432,7 @@ class FAISSIndexer:
         # normalizes by default). Consistent with LongTermMemory._new_index().
         index = faiss.IndexHNSWFlat(self._dimension, self._HNSW_M, faiss.METRIC_INNER_PRODUCT)
         index.hnsw.efConstruction = self._HNSW_EF_CONSTRUCTION
-        index.add(embeddings.astype(np.float32))
+        index.add(embeddings.astype(np.float32))  # type: ignore[arg-type]
 
         # Persist
         faiss.write_index(index, str(self._index_path(schema_id)))
@@ -436,6 +441,16 @@ class FAISSIndexer:
 
         self._indices[schema_id] = index
         self._chunk_meta[schema_id] = chunks
+
+    def get_chunks(self, schema_id: str) -> list[dict[str, Any]]:
+        """
+        Return all chunk dicts for schema_id, loading from disk if needed.
+        Used by RetrievalLayer.retrieve() for FK-join expansion without an
+        additional FAISS search (direct table name lookup).
+        """
+        if schema_id not in self._chunk_meta and not self._load(schema_id):
+            return []
+        return list(self._chunk_meta.get(schema_id, []))
 
     def list_indexed_schemas(self) -> list[str]:
         """
@@ -454,7 +469,7 @@ class FAISSIndexer:
     def search(
         self,
         schema_id: str,
-        query_vec: np.ndarray[Any, Any],
+        query_vec: np.ndarray,
         k: int = 5,
     ) -> list[dict[str, Any]]:
         """
@@ -470,7 +485,7 @@ class FAISSIndexer:
         index = self._indices[schema_id]
         index.hnsw.efSearch = self._HNSW_EF_SEARCH
         q = query_vec.reshape(1, -1).astype(np.float32)
-        distances, indices = index.search(q, k)
+        distances, indices = index.search(q, k)  # type: ignore[arg-type]
 
         meta = self._chunk_meta.get(schema_id, [])
         results: list[dict[str, Any]] = []
@@ -693,7 +708,7 @@ class RetrievalLayer:
             meta_path = self._indexer._meta_path(schema_id)
             try:
                 with open(meta_path) as f:
-                    chunks: list[dict[str, Any]] = json.load(f)
+                    chunks: list[dict] = json.load(f)
             except Exception:  # noqa: BLE001
                 continue
 
@@ -742,6 +757,14 @@ class RetrievalLayer:
 
         _bootstrap_registry() is called here as a lazy fallback in case
         warmup() was not called at startup (dev/test paths).
+
+        FK-join expansion: after the initial top-k retrieval, any table that
+        is FK-adjacent (forward or reverse) to a retrieved chunk AND is
+        explicitly named in the NL query is injected up to _FK_EXPANSION_MAX
+        additional chunks.  This ensures multi-table JOIN queries surface
+        schema context for both sides of the join even when FAISS top-k only
+        returns one of them.  The NL-mention guard prevents adding irrelevant
+        FK-linked tables to single-table queries.
         """
         self._bootstrap_registry()
         import asyncio
@@ -752,6 +775,37 @@ class RetrievalLayer:
 
         if not raw_chunks:
             return []
+
+        # FK-join expansion ---------------------------------------------------
+        # Tables already covered by the FAISS top-k results.
+        represented: set[str] = {c["table_name"] for c in raw_chunks}
+        nl_lower = nl_query.lower()
+
+        # All stored chunks for this schema (direct lookup, no extra embedding).
+        all_chunks = self._indexer.get_chunks(schema_id)
+        table_index: dict[str, dict] = {c["table_name"]: c for c in all_chunks}
+
+        # Collect FK-adjacent tables in both directions:
+        #   Forward  — tables that a retrieved chunk's FK column references.
+        #   Reverse  — tables whose FK column references a retrieved table.
+        adjacent: set[str] = set()
+        for c in raw_chunks:
+            adjacent.update(c.get("fk_targets", []))
+        for c in all_chunks:
+            if any(t in represented for t in c.get("fk_targets", [])):
+                adjacent.add(c["table_name"])
+
+        # Inject only when: (a) not already retrieved, (b) table name appears
+        # literally in the NL query.  Guard (b) prevents a pure customers
+        # query from pulling in the policies chunk just because policies has
+        # an FK to customers.
+        to_add = [
+            table_index[t]
+            for t in adjacent
+            if t not in represented and t in table_index and t.lower() in nl_lower
+        ][:_FK_EXPANSION_MAX]
+        raw_chunks.extend(to_add)
+        # ---------------------------------------------------------------------
 
         return [_chunk_dict_to_schema_chunk(c) for c in raw_chunks]
 
