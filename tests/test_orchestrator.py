@@ -445,6 +445,144 @@ class TestMaxRetriesExhaustion:
         assert "timeout" not in response.insight.lower() or "timed out" in response.insight.lower()
 
 
+class TestColumnHintsAndH2Fix:
+    """
+    Regression guards for:
+      - _column_hints type-fix: _fuzzy_match_columns returns list[str] per
+        column; _error_correct expects str | None. The orchestrator must
+        take the best match (matches[0]) before passing column_hints.
+      - UNRESOLVED_COLUMN fast-path: no close match -> immediate
+        TERMINAL_ERROR naming the missing field(s), error_correct never called.
+      - H2 FIX: error_correct converges to code identical to its input ->
+        TERMINAL_ERROR ("converged"), no wasted final GENERATION attempt.
+    """
+
+    @pytest.mark.asyncio
+    async def test_unresolved_column_no_close_match_terminates_immediately(
+        self,
+    ) -> None:
+        orch, mocks = _make_orchestrator()
+        mocks["retrieval"].retrieve.return_value = [_schema_chunk()]
+        mocks["retrieval"].get_schema_columns = AsyncMock(return_value={"claim_id", "amount"})
+        mocks["llm"].generate = AsyncMock(
+            return_value=_sql_generation_response("SELECT totally_unknown_col FROM claims")
+        )
+
+        failed = _loop_result(
+            success=False,
+            rows=[],
+            error_type="UNRESOLVED_COLUMN",
+            error_message="Column 'totally_unknown_col' does not exist.",
+        )
+        failed.unresolved_columns = ["totally_unknown_col"]
+
+        with patch("orchestrator.ExecutionLoop") as MockLoop:
+            MockLoop.return_value.run.return_value = failed
+            response = await orch.run(_make_request())
+
+        assert response.error is not None
+        assert "totally_unknown_col" in response.error.message
+        # Fast-path breaks before any error_correct call: only the
+        # initial GENERATION call should have fired.
+        assert mocks["llm"].generate.call_count == 1
+        assert response.retry_count == 0
+
+    @pytest.mark.asyncio
+    async def test_column_hints_best_match_injected_into_correction_prompt(
+        self,
+    ) -> None:
+        """unresolved_columns with a close fuzzy match -> _column_hints
+        carries the best match as a str (not the raw list from
+        _fuzzy_match_columns), surfaced in the ERROR_CORRECT error_message."""
+        from prompts import PromptRenderer
+
+        orch, mocks = _make_orchestrator()
+        mocks["retrieval"].retrieve.return_value = [_schema_chunk()]
+        mocks["retrieval"].get_schema_columns = AsyncMock(
+            return_value={"premium_amount", "claim_id"}
+        )
+
+        bad_sql = "SELECT premium_amt FROM policies"
+        corrected_sql = "SELECT premium_amount FROM policies"
+        mocks["llm"].generate = AsyncMock(
+            side_effect=[
+                _sql_generation_response(bad_sql),
+                _sql_generation_response(corrected_sql),
+            ]
+        )
+
+        failed = _loop_result(
+            success=False,
+            rows=[],
+            error_type="UNRESOLVED_COLUMN",
+            error_message="Column 'premium_amt' does not exist.",
+        )
+        failed.unresolved_columns = ["premium_amt"]
+
+        ok = _loop_result(rows=[{"premium_amount": 1000.0}])
+
+        with patch("orchestrator.ExecutionLoop") as MockLoop:
+            MockLoop.return_value.run.side_effect = [failed, ok]
+            with patch(
+                "orchestrator.PromptRenderer.render", wraps=PromptRenderer.render
+            ) as mock_render:
+                response = await orch.run(_make_request())
+
+        assert response.error is None
+        assert response.generated_code == corrected_sql
+
+        ec_calls = [
+            c
+            for c in mock_render.call_args_list
+            if c.kwargs.get("error_type") == "UNRESOLVED_COLUMN"
+        ]
+        assert ec_calls, "Expected an ERROR_CORRECT prompt render call"
+        error_message = ec_calls[0].kwargs["error_message"]
+        # The hint must be a plain column name, not "['premium_amount']"
+        assert "premium_amount" in error_message
+        assert "['premium_amount']" not in error_message
+        assert "Column name corrections" in error_message
+
+    @pytest.mark.asyncio
+    async def test_error_correct_converges_without_change_terminates(self) -> None:
+        """H2 FIX: error_correct returns code identical to its input ->
+        TERMINAL_ERROR immediately, no wasted final GENERATION attempt."""
+        orch, mocks = _make_orchestrator()
+        mocks["retrieval"].retrieve.return_value = [_schema_chunk()]
+        # _loop_result defaults unresolved_columns=[] -> fast-path skipped,
+        # falls straight through to _error_correct.
+
+        sql = (
+            "SELECT p.premium_amt, pay.created_at FROM policies p "
+            "JOIN payments pay ON p.policy_id = pay.policy_id"
+        )
+        # GENERATION and ERROR_CORRECT both return the identical SQL.
+        mocks["llm"].generate = AsyncMock(
+            side_effect=[
+                _sql_generation_response(sql),
+                _sql_generation_response(sql),
+            ]
+        )
+
+        failed = _loop_result(
+            success=False,
+            rows=[],
+            error_type="UNRESOLVED_COLUMN",
+            error_message="Column 'created_at' does not exist on payments.",
+        )
+
+        with patch("orchestrator.ExecutionLoop") as MockLoop:
+            MockLoop.return_value.run.return_value = failed
+            response = await orch.run(_make_request())
+
+        assert response.error is not None
+        assert "converged" in response.error.message.lower()
+        # 1 GENERATION + 1 ERROR_CORRECT = 2 calls; H2 FIX terminates
+        # before a 3rd (wasted) GENERATION attempt would fire.
+        assert mocks["llm"].generate.call_count == 2
+        assert response.retry_count == 0
+
+
 class TestCatchAllLogging:
     """
     Regression guard for H-09 fix.

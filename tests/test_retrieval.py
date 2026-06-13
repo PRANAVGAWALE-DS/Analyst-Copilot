@@ -526,3 +526,162 @@ class TestRetrievalLayer:
             return await layer.retrieve("query", "nonexistent", k=5)
 
         assert asyncio.run(_go()) == []
+
+
+# ---------------------------------------------------------------------------
+# RetrievalLayer.retrieve — FK-join expansion
+# ---------------------------------------------------------------------------
+
+
+def _legacy_chunk_dict(table_name: str, fk_targets: list[str] | None = None) -> dict:
+    """Minimal legacy-format chunk dict accepted by _chunk_dict_to_schema_chunk."""
+    return {
+        "table_name": table_name,
+        "schema_id": "ins_prod_v3",
+        "column_names": [f"{table_name}_id"],
+        "fk_targets": fk_targets or [],
+        "is_pii_flagged": False,
+    }
+
+
+class TestFKJoinExpansion:
+    """
+    Regression guards for the FK-join expansion added to retrieve().
+
+    Schema under test mirrors ins_prod_v3:
+        policies  -> fk_targets: [customers, agents]
+        claims    -> fk_targets: [policies]   (reverse FK to policies)
+        payments  -> fk_targets: [claims]     (reverse FK to claims)
+        customers -> fk_targets: []
+        agents    -> fk_targets: []
+    """
+
+    def _layer_with_chunks(self, all_chunks: list[dict]) -> RetrievalLayer:
+        layer = _mock_layer()
+        layer._embedder.embed_query.return_value = [0.0] * 1024
+        layer._indexer.get_chunks.return_value = all_chunks
+        return layer
+
+    def test_reverse_fk_expansion_when_table_named_in_nl(self):
+        """FAISS returns only 'policies'; NL mentions 'claims' which has a
+        reverse FK to policies -> claims chunk is appended."""
+        policies = _legacy_chunk_dict("policies", fk_targets=["customers", "agents"])
+        claims = _legacy_chunk_dict("claims", fk_targets=["policies"])
+        customers = _legacy_chunk_dict("customers")
+        agents = _legacy_chunk_dict("agents")
+
+        layer = self._layer_with_chunks([policies, claims, customers, agents])
+        layer._indexer.search.return_value = [policies]
+
+        async def _go():
+            return await layer.retrieve(
+                "Show premium_amt from policies along with claim_amount from claims",
+                "ins_prod_v3",
+                k=5,
+            )
+
+        chunks = asyncio.run(_go())
+        tables = {c.table for c in chunks}
+        assert tables == {"policies", "claims"}
+
+    def test_no_expansion_when_adjacent_table_not_named_in_nl(self):
+        """Same setup, but NL does not mention 'claims' -> no expansion."""
+        policies = _legacy_chunk_dict("policies", fk_targets=["customers", "agents"])
+        claims = _legacy_chunk_dict("claims", fk_targets=["policies"])
+
+        layer = self._layer_with_chunks([policies, claims])
+        layer._indexer.search.return_value = [policies]
+
+        async def _go():
+            return await layer.retrieve("Show me total premium amount", "ins_prod_v3", k=5)
+
+        chunks = asyncio.run(_go())
+        assert {c.table for c in chunks} == {"policies"}
+
+    def test_forward_fk_expansion_when_target_table_named_in_nl(self):
+        """FAISS returns 'claims' (fk_targets -> policies); NL mentions
+        'policies' -> policies chunk appended via forward FK."""
+        claims = _legacy_chunk_dict("claims", fk_targets=["policies"])
+        policies = _legacy_chunk_dict("policies", fk_targets=["customers", "agents"])
+
+        layer = self._layer_with_chunks([claims, policies])
+        layer._indexer.search.return_value = [claims]
+
+        async def _go():
+            return await layer.retrieve(
+                "claim_amount from claims and premium_amt from policies",
+                "ins_prod_v3",
+                k=5,
+            )
+
+        chunks = asyncio.run(_go())
+        assert {c.table for c in chunks} == {"claims", "policies"}
+
+    def test_already_represented_table_not_duplicated(self):
+        """If FAISS already returned both tables, expansion adds nothing."""
+        policies = _legacy_chunk_dict("policies", fk_targets=["customers", "agents"])
+        claims = _legacy_chunk_dict("claims", fk_targets=["policies"])
+
+        layer = self._layer_with_chunks([policies, claims])
+        layer._indexer.search.return_value = [policies, claims]
+
+        async def _go():
+            return await layer.retrieve("policies and claims joined", "ins_prod_v3", k=5)
+
+        chunks = asyncio.run(_go())
+        assert len(chunks) == 2
+
+    def test_expansion_capped_at_fk_expansion_max(self):
+        """Three NL-mentioned adjacent tables exist; only
+        _FK_EXPANSION_MAX (2) may be appended."""
+        from analyst_copilot.retrieval import _FK_EXPANSION_MAX
+
+        policies = _legacy_chunk_dict("policies", fk_targets=["customers", "agents", "extra_table"])
+        customers = _legacy_chunk_dict("customers")
+        agents = _legacy_chunk_dict("agents")
+        extra_table = _legacy_chunk_dict("extra_table")
+
+        layer = self._layer_with_chunks([policies, customers, agents, extra_table])
+        layer._indexer.search.return_value = [policies]
+
+        async def _go():
+            return await layer.retrieve(
+                "policies joined with customers, agents, and extra_table",
+                "ins_prod_v3",
+                k=5,
+            )
+
+        chunks = asyncio.run(_go())
+        # 1 original + at most _FK_EXPANSION_MAX appended
+        assert len(chunks) <= 1 + _FK_EXPANSION_MAX
+        assert len(chunks) == 1 + _FK_EXPANSION_MAX
+
+    def test_no_fk_targets_anywhere_no_expansion(self):
+        """Schema with zero FK constraints -> adjacent is empty, no crash."""
+        policies = _legacy_chunk_dict("policies", fk_targets=[])
+        claims = _legacy_chunk_dict("claims", fk_targets=[])
+
+        layer = self._layer_with_chunks([policies, claims])
+        layer._indexer.search.return_value = [policies]
+
+        async def _go():
+            return await layer.retrieve("policies and claims", "ins_prod_v3", k=5)
+
+        chunks = asyncio.run(_go())
+        assert {c.table for c in chunks} == {"policies"}
+
+    def test_get_chunks_unloaded_schema_returns_empty(self):
+        """get_chunks() on a schema with no FAISS index returns [] and the
+        retrieve() FK-expansion path degrades to FAISS-only results."""
+        policies = _legacy_chunk_dict("policies", fk_targets=["customers"])
+
+        layer = _mock_layer()
+        layer._embedder.embed_query.return_value = [0.0] * 1024
+        layer._indexer.search.return_value = [policies]
+        layer._indexer.get_chunks.return_value = []
+
+        async def _go():
+            return await layer.retrieve("policies and customers", "ins_prod_v3", k=5)
+
+        chunks = asyncio.run(_go())
+        assert {c.table for c in chunks} == {"policies"}
