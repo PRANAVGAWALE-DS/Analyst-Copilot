@@ -13,6 +13,12 @@ Ask questions in plain English. Get executed results, generated code, and AI-wri
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white)](https://docker.com)
 [![License](https://img.shields.io/badge/License-MIT-6B7280?style=flat-square)](LICENSE)
 
+<br/>
+
+![Analyst Copilot Dashboard](assets/dashboard.png)
+
+*Ask a business question in plain English — the agent investigates, queries your database, and returns structured findings with root cause analysis and recommended actions.*
+
 </div>
 
 ---
@@ -369,6 +375,8 @@ New_Analyst/
 │   └── eval.py                   # Evaluation harness (generate pairs, run, report)
 ├── app.py                        # FastAPI route implementations, middleware
 ├── main.py                       # Uvicorn entrypoint
+├── assets/
+│   └── dashboard.png             # Dashboard screenshot (README hero image)
 ├── data/
 │   ├── faiss_index/              # FAISS index + embed_cache.json  [gitignored]
 │   └── lt_memory/                # Long-term memory FAISS index    [gitignored]
