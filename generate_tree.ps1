@@ -9,6 +9,7 @@ $excludeDirPatterns = @(
     '^\.git$',
     '^\.venv$',
     '^venv$',
+    '^.venv1',
     '^venv_',
     '^env$',
     '^env_',
