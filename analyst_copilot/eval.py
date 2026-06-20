@@ -28,6 +28,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import math
 import sqlite3
@@ -841,13 +842,29 @@ def _expected_columns(sql: str) -> set[str]:
 
 
 def _normalize_col(col: str) -> str:
-    """Strip table prefix and aggregate prefix for semantic comparison."""
+    """
+    Strip table prefix, aggregate prefix/suffix, and time-period prefix for
+    semantic comparison.
+
+    ML-6 additions (over the original prefix-only strip):
+      1. mean_ added to prefix list  — handles ranking_bottom_n LLM alias pattern
+         (LLM uses mean_X; GT uses avg_X; both normalize to X).
+      2. Aggregate suffix strip      — handles LLM suffix-style aliases such as
+         claim_count, claim_total, policy_count (common in Llama/Groq output)
+         that the prefix pass never reached.
+      3. Time-period normalization   — collapses paid_month / claim_month → month
+         so time_series templates score correctly when the LLM prepends the
+         metric name to the period column (e.g. paid_month instead of month).
+    """
     if "." in col:
         col = col.split(".")[-1]
+
+    # Pass 1: aggregate PREFIX strip (first match wins)
     for prefix in (
         "total_",
         "avg_",
         "average_",
+        "mean_",  # ML-6: LLM uses mean_ where GT uses avg_
         "max_",
         "min_",
         "count_",
@@ -861,6 +878,31 @@ def _normalize_col(col: str) -> str:
         if col.startswith(prefix):
             col = col[len(prefix) :]
             break
+
+    # Pass 2: aggregate SUFFIX strip (first match wins, guard against empty stem)
+    # ML-6: LLM commonly appends _count / _total / _sum instead of prefixing.
+    for suffix in (
+        "_count",
+        "_total",
+        "_sum",
+        "_avg",
+        "_mean",
+        "_average",
+        "_max",
+        "_min",
+    ):
+        if col.endswith(suffix) and len(col) > len(suffix):
+            col = col[: -len(suffix)]
+            break
+
+    # Pass 3: time-period normalization
+    # ML-6: paid_month / claim_month → month; fiscal_quarter → quarter.
+    # Only fires when the LLM has prepended the metric name to the period token.
+    _TIME_PERIODS = frozenset({"month", "quarter", "week", "year", "day", "period"})
+    tokens = col.split("_")
+    if len(tokens) >= 2 and tokens[-1] in _TIME_PERIODS:
+        col = tokens[-1]
+
     return col
 
 
@@ -869,18 +911,32 @@ _BARE_AGGREGATES = frozenset({"count", "sum", "avg", "average", "max", "min"})
 
 def _columns_semantically_match(a: set[str], b: set[str]) -> tuple[bool, bool]:
     """
-    Return (correct, partial_correct) after normalising aggregate prefixes.
+    Return (correct, partial_correct) after normalising aggregate prefixes/suffixes.
 
-    ML-5 FIX: the previous 50% threshold meant a 4-column result was "correct"
-    with only 2 matching columns — too lenient for analytical queries where every
-    column is semantically significant.
+    ML-5 FIX: tightened thresholds (was 50% → correct; now 75%/50% split).
+    ML-6 FIX: four improvements to reduce false negatives:
+
+    1. _normalize_col now strips aggregate suffixes and time-period prefixes
+       (see that function's docstring for details).
+
+    2. BARE_AGG check made symmetric:
+       Original: only fires when GT (a_norm) is a bare aggregate keyword.
+       Problem:  LLM returning bare COUNT(*) for GT alias like total_policie
+                 never matched because a_norm={policie} ∉ BARE_AGGREGATES.
+       Fix:      also fires when LLM (b_norm) is a bare aggregate and GT is
+                 a single-column result — both sides get the free scalar pass.
+       Guard:    only when BOTH sets are singletons (multi-col GT is unaffected).
+
+    3. Fuzzy pairwise matching after exact set intersection:
+       Remaining unmatched columns are compared with difflib.SequenceMatcher.
+       Threshold 0.75, minimum 5 chars per side — catches entity-truncation
+       artefacts from _instantiate_template's rstrip('s') singularisation
+       (policie ↔ policy = 0.92, claim ↔ claim_amount = 0.59 → safe).
+       Greedy assignment (best ratio first, each b-column used at most once).
 
     Thresholds:
-      correct         — overlap >= 75%  (or exact scalar match)
+      correct         — overlap >= 75%  (or scalar bare-aggregate match)
       partial_correct — overlap >= 50% and < 75%  (tracked separately)
-
-    Scalar result (single aggregation): exact column match required for correct;
-    bare aggregate names (count/sum/avg) match any single-column GT result.
 
     Returns (False, False) when either set is empty.
     """
@@ -890,11 +946,38 @@ def _columns_semantically_match(a: set[str], b: set[str]) -> tuple[bool, bool]:
     a_norm = {_normalize_col(c) for c in a}
     b_norm = {_normalize_col(c) for c in b}
 
-    # Scalar: bare aggregate matches any single-value ground truth
-    if a_norm <= _BARE_AGGREGATES and len(b_norm) == 1:
+    # Scalar bare-aggregate match (symmetric):
+    #   GT bare agg  + any LLM singleton  (original behaviour, kept)
+    #   LLM bare agg + any GT  singleton  (ML-6: new symmetric direction)
+    if (a_norm <= _BARE_AGGREGATES and len(b_norm) == 1) or (
+        b_norm <= _BARE_AGGREGATES and len(a_norm) == 1
+    ):
         return True, False
 
-    overlap = len(a_norm & b_norm) / max(len(a_norm), len(b_norm))
+    # Exact set intersection (fast path)
+    exact_matched = len(a_norm & b_norm)
+
+    # Fuzzy pairwise for columns that didn't match exactly (ML-6)
+    a_unmatched = sorted(a_norm - b_norm)
+    b_unmatched = sorted(b_norm - a_norm)
+    b_used: set[str] = set()
+    fuzzy_matched = 0
+    for col_a in a_unmatched:
+        if len(col_a) < 5:  # too short for reliable fuzzy comparison
+            continue
+        best_ratio, best_b = 0.0, None
+        for col_b in b_unmatched:
+            if col_b in b_used or len(col_b) < 5:
+                continue
+            ratio = difflib.SequenceMatcher(None, col_a, col_b).ratio()
+            if ratio > best_ratio:
+                best_ratio, best_b = ratio, col_b
+        if best_ratio >= 0.75 and best_b is not None:
+            fuzzy_matched += 1
+            b_used.add(best_b)
+
+    total_matched = exact_matched + fuzzy_matched
+    overlap = total_matched / max(len(a_norm), len(b_norm))
     correct = overlap >= 0.75
     partial = (not correct) and overlap >= 0.50
     return correct, partial

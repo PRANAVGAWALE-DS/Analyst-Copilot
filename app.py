@@ -177,14 +177,20 @@ async def _startup() -> None:
         # 3. Schema registry + retrieval
         state.registry = SchemaRegistry()
         state.embedder = SchemaEmbedder(
-            model_name=_env("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5"),
+            # ML-7 FIX: default changed bge-large-en-v1.5 → bge-small-en-v1.5.
+            # app.py passes model_name explicitly so retrieval.py's own default
+            # never fired — this was the effective default for the whole system.
+            # bge-large (1024-dim) was being loaded while the FAISS schema index
+            # on disk is 384-dim (rebuilt after OOM), causing assert d == self.d
+            # on every embed_cache miss.  Override via EMBEDDING_MODEL in .env.
+            model_name=_env("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5"),
             cache_dir=_env("FAISS_INDEX_DIR", "data/faiss_index"),
             batch_size=int(_env("EMBEDDING_BATCH_SIZE", "64")),
         )
         state.indexer = FAISSIndexer(
             index_dir=_env("FAISS_INDEX_DIR", "data/faiss_index"),
-            # FIX: default corrected from 768 → 1024 (bge-large outputs 1024 dims).
-            dimension=int(_env("EMBEDDING_DIM", "1024")),
+            # ML-7 FIX: default corrected 1024 → 384 (bge-small-en-v1.5 output dim).
+            dimension=int(_env("EMBEDDING_DIM", "384")),
         )
         state.retrieval = RetrievalLayer(
             embedder=state.embedder,
@@ -275,12 +281,12 @@ async def _startup() -> None:
         state.long_term_memory = LongTermMemory(
             embedder=state.embedder,
             index_dir=_env("LT_MEMORY_DIR", "data/lt_memory"),
-            # FIX: pass EMBEDDING_DIM explicitly.  Without this, LongTermMemory
-            # used its hardcoded default (768) while the embedder produced 1024-dim
-            # vectors.  _new_index() built IndexHNSWFlat(768); the first store()
-            # call passed a 1024-dim vector → FAISS assertion error.
-            # Now a single EMBEDDING_DIM change in .env propagates everywhere.
-            dimension=int(_env("EMBEDDING_DIM", "1024")),
+            # ML-7 FIX: default corrected 1024 → 384 to match bge-small-en-v1.5.
+            # A single EMBEDDING_DIM change in .env propagates to both SchemaIndex
+            # and LongTermMemory.  If the on-disk LTM FAISS index was built at
+            # 1024-dim, delete lt_memory.faiss + lt_memory.meta.json and restart
+            # to let LTM rebuild cleanly at 384-dim.
+            dimension=int(_env("EMBEDDING_DIM", "384")),
             k_retrieve=int(_env("LT_MEMORY_K", "3")),
         )
 

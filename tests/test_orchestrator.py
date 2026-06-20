@@ -22,6 +22,7 @@ import json
 
 # ── Path bootstrap (mirrors conftest.py / _bootstrap.py) ──────────────────────
 import os
+import re
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -221,6 +222,28 @@ def _make_request(**kwargs: Any) -> Any:
     return QueryRequest(**defaults)
 
 
+# ── SQL comparison helper ───────────────────────────────────────────────────────
+
+
+def _canon_sql(s: str) -> str:
+    """Canonicalize SQL for comparison.
+
+    The sql_postprocessor reformats LLM output (pretty-print, adds explicit
+    NULLS LAST/FIRST to ORDER BY clauses).  Tests that compare
+    ``response.generated_code`` against a raw SQL literal would otherwise
+    fail on cosmetic differences.  This helper:
+      1. Flattens whitespace via sqlglot transpile (pretty=False).
+      2. Strips explicit NULLS ordering so DESC and DESC NULLS LAST compare equal.
+    """
+    import sqlglot  # local import — sqlglot is a prod dependency via sql_postprocessor
+
+    try:
+        flat = sqlglot.transpile(s, read="postgres", write="postgres", pretty=False)[0]
+    except Exception:
+        flat = re.sub(r"\s+", " ", s).strip()
+    return re.sub(r"\s+NULLS\s+(?:LAST|FIRST)\b", "", flat, flags=re.IGNORECASE).strip()
+
+
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 
@@ -252,7 +275,7 @@ class TestSQLHappyPath:
             response = await orch.run(_make_request())
 
         assert response.error is None
-        assert response.generated_code == sql
+        assert _canon_sql(response.generated_code) == _canon_sql(sql)
         assert response.code_type == "sql"
         assert response.row_count == 5
         assert response.retry_count == 0

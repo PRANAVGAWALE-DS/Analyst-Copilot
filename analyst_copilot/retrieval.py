@@ -182,7 +182,15 @@ class SchemaEmbedder:
         self._model_name: str = (
             model_name
             if model_name is not None
-            else (os.environ.get("EMBEDDING_MODEL") or "BAAI/bge-large-en-v1.5")
+            # ML-7 FIX: default changed from bge-large-en-v1.5 (1024-dim) to
+            # bge-small-en-v1.5 (384-dim) to match the FAISS index on disk.
+            # The index was rebuilt with bge-small; leaving the default as
+            # bge-large caused cache-hit queries (384-dim, stored in
+            # embed_cache.json) to succeed while cache-miss queries (live
+            # bge-large, 1024-dim) crashed with FAISS assertion d == self.d.
+            # Override via EMBEDDING_MODEL env var if a different model is
+            # needed without changing code.
+            else (os.environ.get("EMBEDDING_MODEL") or "BAAI/bge-small-en-v1.5")
         )
         self._cache_path = Path(cache_dir) / _EMBED_CACHE_FILENAME
         self._legacy_cache_path = Path("data") / _EMBED_CACHE_FILENAME
@@ -204,6 +212,14 @@ class SchemaEmbedder:
 
         self._model = SentenceTransformer(
             self._model_name,
+            # ML-7 FIX: pin downloads to project model_cache so all model
+            # artifacts stay alongside the FAISS index rather than scattering
+            # to ~/.cache/huggingface.
+            # local_files_only removed: data/model_cache/snapshots/ only has
+            # config files — tokenizer and weights are absent.  Allowing the
+            # download completes the cache on first run; subsequent restarts
+            # load from the now-complete local cache without network access.
+            cache_folder="data/model_cache",
             model_kwargs={"low_cpu_mem_usage": True},
         )
         self._model = self._model.to("cpu")
@@ -371,8 +387,12 @@ class FAISSIndexer:
     def __init__(
         self,
         index_dir: str | Path = "data/faiss_index",
-        # FIX: default corrected from 768 → 1024 (bge-large-en-v1.5 output dim).
-        dimension: int = 1024,
+        # ML-7 FIX: default corrected from 1024 → 384 to match bge-small-en-v1.5.
+        # The previous default of 1024 was set for bge-large-en-v1.5; after the
+        # OOM-driven switch to bge-small the index on disk is 384-dim but the
+        # constructor default was never updated.  Only affects index *creation*
+        # (add()); existing indexes are read from disk at their actual dimension.
+        dimension: int = 384,
     ) -> None:
         self._index_dir = Path(index_dir)
         self._dimension = dimension

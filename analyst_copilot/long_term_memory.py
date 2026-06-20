@@ -113,12 +113,12 @@ class LongTermMemory:
         self,
         embedder: Any,
         index_dir: str | Path = "data/lt_memory",
-        # FIX: default corrected from 768 → 1024.
-        # 768 is the output dimension of bge-BASE-en-v1.5.
-        # bge-LARGE-en-v1.5 (the configured model) outputs 1024 dimensions.
-        # This default must match EMBEDDING_DIM in .env; app.py now passes
-        # it explicitly so a model change only requires updating EMBEDDING_DIM.
-        dimension: int = 1024,
+        # ML-7 FIX: default corrected from 1024 → 384 to match bge-small-en-v1.5.
+        # 1024 was correct for bge-large-en-v1.5; after the OOM-driven model
+        # switch this default was left stale.  app.py now passes dimension
+        # explicitly from EMBEDDING_DIM so this default only matters for callers
+        # that construct LongTermMemory directly (tests, scripts).
+        dimension: int = 384,
         k_retrieve: int = 3,
     ) -> None:
         self._embedder = embedder
