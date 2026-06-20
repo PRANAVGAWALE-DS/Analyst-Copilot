@@ -19,6 +19,7 @@ from __future__ import annotations
 import ast
 import concurrent.futures
 import contextlib
+import decimal
 import json
 
 # ---------------------------------------------------------------------------
@@ -1753,9 +1754,27 @@ def validate_result(
     _first_row = result[0]
     _null_dominated: list[str] = []
     for _col, _sample in _first_row.items():
-        # Only inspect non-string, non-bool columns — numeric or None values
-        # are potential metric columns; strings are dimension/grouping columns.
+        # Skip string and bool columns — dimension/grouping columns, never metrics.
         if isinstance(_sample, str | bool):
+            continue
+        # Determine the actual column type by finding the first non-None value.
+        # result[0][col] may itself be None when the leading rows are all null.
+        _typed_sample = _sample
+        if _typed_sample is None:
+            for _row in result[1:11]:
+                _v = _row.get(_col)
+                if _v is not None:
+                    _typed_sample = _v
+                    break
+        # Only check genuinely numeric columns (int, float, Decimal).
+        # DATE / TIMESTAMP / UUID columns are not metric columns — they can
+        # legitimately have high null rates (e.g. policies.end_date is NULL
+        # for all active policies at 84.9%) and must never fire IMPLAUSIBLE_VALUE.
+        # If _typed_sample is still None (100%-null column), always proceed —
+        # a completely-null metric column always exceeds the 80% threshold.
+        if _typed_sample is not None and not isinstance(
+            _typed_sample, int | float | decimal.Decimal
+        ):
             continue
         _null_count = sum(1 for row in result if row.get(_col) is None)
         if _null_count / _n_rows > 0.8:

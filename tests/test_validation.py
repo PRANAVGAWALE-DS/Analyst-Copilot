@@ -12,6 +12,9 @@ Key differences from sandbox assumptions:
 
 from __future__ import annotations
 
+import datetime
+import decimal
+
 import _bootstrap  # noqa: F401
 import pytest
 from validation import (
@@ -200,6 +203,68 @@ class TestValidateResult:
         r = validate_result(rows, row_cap=10_000)
         assert r.valid is True
         assert r.issue == "RESULT_CAPPED"
+
+    def test_date_column_high_null_not_flagged(self) -> None:
+        # policies.end_date is 84.9% NULL — legitimately null for active policies.
+        # The type guard must exclude datetime.date columns from the null-dominance check.
+        rows = [
+            {
+                "policy_id": f"p{i}",
+                "end_date": (datetime.date(2025, 1, 1) if i == 0 else None),
+            }
+            for i in range(10)
+        ]
+        r = validate_result(rows)
+        assert (
+            r.issue != "IMPLAUSIBLE_VALUE"
+        ), "DATE columns must not trigger IMPLAUSIBLE_VALUE regardless of null rate"
+
+    def test_timestamp_column_high_null_not_flagged(self) -> None:
+        # claims.resolved_at is 25.1% NULL — TIMESTAMP columns must also be excluded.
+        rows = [
+            {
+                "claim_id": f"c{i}",
+                "resolved_at": (datetime.datetime(2024, 6, 1) if i == 0 else None),
+            }
+            for i in range(10)
+        ]
+        r = validate_result(rows)
+        assert (
+            r.issue != "IMPLAUSIBLE_VALUE"
+        ), "TIMESTAMP columns must not trigger IMPLAUSIBLE_VALUE regardless of null rate"
+
+    def test_numeric_float_column_high_null_flagged(self) -> None:
+        # A float column with 9/10 = 90% null must still fire — numeric type guard
+        # must not exclude it.
+        rows = [
+            {"claim_id": f"c{i}", "claim_amount": (500.0 if i == 0 else None)} for i in range(10)
+        ]
+        r = validate_result(rows)
+        assert r.issue == "IMPLAUSIBLE_VALUE"
+        assert r.valid is True  # non-blocking: result still returned
+
+    def test_decimal_column_high_null_flagged(self) -> None:
+        # psycopg2 returns NUMERIC columns as decimal.Decimal — must be treated
+        # as a numeric metric and fire when >80% null.
+        rows = [
+            {"paid_amount": (decimal.Decimal("1234.56") if i == 0 else None)} for i in range(10)
+        ]
+        r = validate_result(rows)
+        assert r.issue == "IMPLAUSIBLE_VALUE"
+
+    def test_all_null_column_flagged(self) -> None:
+        # 100% null — no typed sample is ever found; the guard must still fire
+        # because _typed_sample stays None and the isinstance check is skipped.
+        rows = [{"claim_id": f"c{i}", "claim_amount": None} for i in range(5)]
+        r = validate_result(rows)
+        assert r.issue == "IMPLAUSIBLE_VALUE"
+
+    def test_first_row_none_later_numeric_fires(self) -> None:
+        # First row is None; typed sample found in row 2 (index 1); still
+        # 9/10 = 90% null overall — must fire.
+        rows = [{"metric": (None if i != 1 else 42.0)} for i in range(10)]
+        r = validate_result(rows)
+        assert r.issue == "IMPLAUSIBLE_VALUE"
 
 
 if __name__ == "__main__":
