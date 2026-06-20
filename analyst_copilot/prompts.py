@@ -589,7 +589,32 @@ CORRECT — loss_ratio denominator must come from premium_by_type CTE only:
   -- pbt.total_premium = SUM(ALL premiums for that type, no claim-side filter)
   -- See full CTE example above.
 
+RULE 20 — NO UNREQUESTED COLUMNS
+When the user names specific columns explicitly (e.g. "show the X", "include
+Y and Z", "the X along with the Y"), the final SELECT list must contain
+exactly those columns. Do not add an identifier, primary key, or any other
+column "for reference," "for completeness," or "to identify the row" — the
+user did not ask for it.
+
+Exception — a column is still required when it is structurally necessary:
+  - a join key used inside a CTE (see RULE 19 fan-out patterns)
+  - a GROUP BY dimension
+  - a CTE-computed column the user explicitly asked to see (RULE 17)
+This rule restricts adding columns the user did NOT request and that are not
+structurally required for the query to execute correctly — it does not
+override RULE 17 or RULE 19.
+
+  CORRECT → user asks: "Show the paid_amount along with the paid_at"
+    SELECT paid_amount, paid_at FROM payments LIMIT 10000
+
+  WRONG → adds payment_id without being asked:
+    SELECT payment_id, paid_amount, paid_at FROM payments LIMIT 10000
+
+This complements RULE 2 (no SELECT *): RULE 2 forbids under-specifying the
+column list; RULE 20 forbids over-specifying it.
+
 ━━━ SCHEMA-DERIVED HARD CONSTRAINTS — apply before writing any SQL ━━━
+
 
 The following constraints are extracted from the column and table metadata
 of the schema retrieved for this query. Each constraint is a grounding
