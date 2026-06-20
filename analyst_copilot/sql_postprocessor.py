@@ -6,6 +6,7 @@ Post-process LLM-generated SQL *before* DB execution in analyst_copilot.
 Automatic fixes applied every query (no human needed):
   F1  Integer division    — COUNT/SUM numerators cast to DECIMAL/NUMERIC
   F2  Division-by-zero    — aggregate denominators wrapped in NULLIF(..., 0)
+  F3  NULL ordering       — ORDER BY ... DESC terms forced to NULLS LAST
 
 Warnings emitted → trigger LLM self-correction retry (see needs_retry):
   W1  Fan-out risk        — payments/claims/policies joined without CTE pre-aggregation
@@ -139,12 +140,13 @@ def postprocess_sql(raw_sql: str) -> PostProcessResult:
 
     tree, f1 = _fix_integer_division(tree)
     tree, f2 = _fix_missing_nullif(tree)
+    tree, f3 = _fix_null_ordering(tree)
     warnings = _warn_fanout(tree)
 
-    if f1 or f2:
+    if f1 or f2 or f3:
         result.sql = tree.sql(dialect=_DIALECT, pretty=True)
 
-    result.fixes_applied = f1 + f2
+    result.fixes_applied = f1 + f2 + f3
     result.warnings = warnings
 
     if result.was_modified:
@@ -247,8 +249,51 @@ def _fix_missing_nullif(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# F3 — NULL ordering: force NULLS LAST on ORDER BY ... DESC
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _fix_null_ordering(
+    tree: exp.Expression,
+) -> tuple[exp.Expression, list[str]]:
+    """
+    F3 — NULL ordering: force NULLS LAST on every ORDER BY ... DESC term.
+
+    Why needed:
+        Postgres treats NULL as larger than any non-null value for sort
+        purposes: ASC defaults to NULLS LAST (correct already), but DESC
+        defaults to NULLS FIRST. A "top N by <col> DESC LIMIT N" query on a
+        column with any NULL rate then returns the NULL rows first —
+        displacing the actual highest values from the result entirely,
+        not just from the "top of the list" but from the result set itself
+        once N is small.
+
+    Skips:
+        - ASC terms (and unspecified direction, which defaults to ASC) —
+          Postgres' default NULLS LAST is already correct for these.
+        - DESC terms that already render NULLS LAST (idempotent re-run).
+
+    Applies to every ORDER BY in the statement, including nested window-
+    function ORDER BY clauses (e.g. RULE 17's
+    ROW_NUMBER() OVER (... ORDER BY SUM(claim_amount) DESC)).
+    """
+    fixes: list[str] = []
+
+    for ordered in tree.find_all(exp.Ordered):
+        if ordered.args.get("desc") and ordered.args.get("nulls_first") is not False:
+            ordered.set("nulls_first", False)
+            fixes.append(
+                "F3: NULLS LAST on ORDER BY ... DESC — prevents NULL-valued "
+                "rows from displacing top-N results"
+            )
+
+    return tree, fixes
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # W1 — Fan-out detection (warning only; auto-fix requires schema-aware CTEs)
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 # Schema cardinalities:
 #   policies (1) ──< claims (many)    — joining inflates SUM(premium_amt)

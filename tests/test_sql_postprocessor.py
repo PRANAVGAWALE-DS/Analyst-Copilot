@@ -323,3 +323,74 @@ class TestCombinedFixes:
         assert _f2(r), "Expected F2 NULLIF on denominator"
         assert _w1(r), "Expected W1 fan-out warning"
         assert r.needs_retry is True
+
+
+class TestF3NullOrdering:
+    """F3 — ORDER BY ... DESC → NULLS LAST."""
+
+    def test_desc_without_nulls_gets_nulls_last(self):
+        sql = "SELECT claim_id, claim_amount FROM claims ORDER BY claim_amount DESC LIMIT 10"
+        pp = postprocess_sql(sql)
+        assert "NULLS LAST" in pp.sql.upper()
+        assert any("F3" in f for f in pp.fixes_applied)
+
+    def test_asc_is_unchanged(self):
+        sql = "SELECT customer_id, name FROM customers ORDER BY name ASC LIMIT 10000"
+        pp = postprocess_sql(sql)
+        assert "NULLS" not in pp.sql.upper()
+        assert not any("F3" in f for f in pp.fixes_applied)
+
+    def test_no_order_by_unchanged(self):
+        sql = "SELECT COUNT(*) AS total FROM claims"
+        pp = postprocess_sql(sql)
+        assert not any("F3" in f for f in pp.fixes_applied)
+
+    def test_explicit_nulls_last_is_idempotent(self):
+        sql = "SELECT claim_id, claim_amount FROM claims ORDER BY claim_amount DESC NULLS LAST LIMIT 10"
+        pp = postprocess_sql(sql)
+        # idempotent — no F3 fix should fire
+        assert not any("F3" in f for f in pp.fixes_applied)
+        assert pp.sql.upper().count("NULLS LAST") == 1
+
+    def test_window_function_desc_gets_nulls_last(self):
+        sql = (
+            "SELECT policy_type, total_claim_amount "
+            "FROM (SELECT p.policy_type, SUM(c.claim_amount) AS total_claim_amount, "
+            "ROW_NUMBER() OVER (PARTITION BY p.policy_type ORDER BY SUM(c.claim_amount) DESC) AS rank "
+            "FROM policies p JOIN claims c ON p.policy_id = c.policy_id "
+            "GROUP BY p.policy_type) sub ORDER BY policy_type, rank"
+        )
+        pp = postprocess_sql(sql)
+        assert "NULLS LAST" in pp.sql.upper()
+        assert any("F3" in f for f in pp.fixes_applied)
+
+    def test_f3_fix_label_mentions_nulls_last(self):
+        sql = "SELECT claim_id, resolved_at FROM claims ORDER BY resolved_at DESC LIMIT 10"
+        pp = postprocess_sql(sql)
+        f3_labels = [f for f in pp.fixes_applied if "F3" in f]
+        assert f3_labels
+        assert "NULLS LAST" in f3_labels[0].upper()
+
+    def test_f3_does_not_fire_on_implicitly_asc(self):
+        # No direction specified → ASC by default → NULLS LAST already correct → no F3
+        sql = "SELECT policy_id, premium_amt FROM policies ORDER BY premium_amt LIMIT 10"
+        pp = postprocess_sql(sql)
+        assert not any("F3" in f for f in pp.fixes_applied)
+
+    def test_f1_f2_f3_all_fire_on_combined_query(self):
+        sql = (
+            "SELECT policy_type, "
+            "COUNT(CASE WHEN claim_status IN ('approved','paid') THEN 1 END) / COUNT(*) AS approval_rate, "
+            "SUM(claim_amount) AS total_claim_amount "
+            "FROM claims c JOIN policies p ON c.policy_id = p.policy_id "
+            "GROUP BY policy_type ORDER BY total_claim_amount DESC"
+        )
+        pp = postprocess_sql(sql)
+        assert any("F1" in f for f in pp.fixes_applied)
+        assert any("F2" in f for f in pp.fixes_applied)
+        assert any("F3" in f for f in pp.fixes_applied)
+        assert "NULLS LAST" in pp.sql.upper()
+        # Re-parse confirms the combined output is valid SQL
+        import sqlglot
+
+        sqlglot.parse_one(pp.sql, dialect="postgres", error_level=sqlglot.ErrorLevel.RAISE)
