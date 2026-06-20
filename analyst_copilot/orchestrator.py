@@ -1060,6 +1060,23 @@ class Orchestrator:
                         else:
                             state.generated_sql = cached_code
                             state.generated_code = None
+                            # Apply the same systematic fixes that _generation applies to
+                            # LLM SQL — LTM-cached SQL bypasses _generation entirely and
+                            # must receive the same treatment (F1 integer-division cast,
+                            # F2 NULLIF guard, F3 NULLS LAST on ORDER BY ... DESC).
+                            # Wrapped in try/except so a sqlglot failure never blocks the
+                            # LTM fast-path execution.
+                            try:
+                                _lt_pp = postprocess_sql(state.generated_sql)
+                                if _lt_pp.was_modified:
+                                    state.generated_sql = _lt_pp.sql
+                                if _lt_pp.warnings:
+                                    state.result_warnings.extend(_lt_pp.warnings)
+                                state.postprocessor_hint = (
+                                    _lt_pp.retry_hint if _lt_pp.needs_retry else None
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass  # postprocessor failure must never block LTM fast-path
                         state.code_type = _inferred_type
                         state.terminal_state = "VALIDATION"  # skip to VALIDATION
                         state.lt_exact_hit_used = True  # mark for _result_check invalidation
@@ -1745,6 +1762,19 @@ class Orchestrator:
                 state.result_warnings.append(rt.message)
                 state.insight = rt.message
                 state.terminal_state = "TERMINAL"
+                # If this turn used an LTM exact hit, the cached SQL produced a
+                # null-dominant result — either because the SQL was semantically
+                # wrong before being stored, or because F3/postprocessor fixes
+                # weren't applied at store time. Invalidate the entry so the next
+                # request for the same query falls through to full LLM generation
+                # and stores a corrected version.
+                if state.lt_exact_hit_used and self._long_term_memory is not None:
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(
+                            self._long_term_memory.invalidate,
+                            state.schema_id,
+                            state.nl_query_clean,
+                        )
                 tl.set_output({"issue": "IMPLAUSIBLE_VALUE", "insight_suppressed": True})
                 return
 
